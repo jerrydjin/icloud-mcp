@@ -39,9 +39,10 @@ function createServer(): {
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Bearer token auth — this is on the public internet
-  const expected = process.env.AUTH_TOKEN;
+  const expected = process.env.AUTH_TOKEN?.trim();
   if (expected) {
-    const provided = req.headers.authorization?.replace("Bearer ", "");
+    const authHeader = req.headers.authorization ?? "";
+    const provided = authHeader.replace(/^Bearer\s+/i, "").trim();
     if (provided !== expected) {
       res.status(401).json({
         jsonrpc: "2.0",
