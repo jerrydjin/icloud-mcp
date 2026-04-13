@@ -176,6 +176,7 @@ export function registerReadTools(
         .optional()
         .default("INBOX")
         .describe("Folder to search in"),
+      text: z.string().optional().describe("Full-text search across entire message content (headers and body)"),
       from: z.string().optional().describe("Filter by sender address or name"),
       to: z.string().optional().describe("Filter by recipient address"),
       subject: z.string().optional().describe("Filter by subject text"),
@@ -197,8 +198,9 @@ export function registerReadTools(
         .default(20)
         .describe("Maximum results (max 100)"),
     },
-    async ({ folder, from, to, subject, since, before, unseen, flagged, limit }) => {
+    async ({ folder, text, from, to, subject, since, before, unseen, flagged, limit }) => {
       const criteria: Record<string, unknown> = {};
+      if (text) criteria.text = text;
       if (from) criteria.from = from;
       if (to) criteria.to = to;
       if (subject) criteria.subject = subject;
