@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import MailComposer from "nodemailer/lib/mail-composer";
 import type { SendResult } from "../types.ts";
 
 // SMTP sends are NEVER retried automatically. If the connection drops mid-send,
@@ -58,5 +59,36 @@ export class SmtpProvider {
       messageId: info.messageId,
       success: true,
     };
+  }
+
+  async buildRawMessage(options: {
+    to: string | string[];
+    subject: string;
+    body: string;
+    from?: string;
+    fromName?: string;
+    cc?: string[];
+    bcc?: string[];
+    inReplyTo?: string;
+    references?: string[];
+  }): Promise<Buffer> {
+    const to = Array.isArray(options.to) ? options.to.join(", ") : options.to;
+    const address = options.from ?? this.email;
+    const fromHeader = options.fromName
+      ? `${options.fromName} <${address}>`
+      : address;
+
+    const mail = new MailComposer({
+      from: fromHeader,
+      to,
+      cc: options.cc?.join(", "),
+      bcc: options.bcc?.join(", "),
+      subject: options.subject,
+      text: options.body,
+      inReplyTo: options.inReplyTo,
+      references: options.references?.join(" "),
+    });
+
+    return await mail.compile().build();
   }
 }

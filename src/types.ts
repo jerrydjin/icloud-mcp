@@ -25,6 +25,7 @@ export interface MessageFull {
   from: EmailAddress;
   to: EmailAddress[];
   cc: EmailAddress[];
+  bcc: EmailAddress[];
   date: string;
   textBody: string;
   htmlBody?: string;
@@ -43,5 +44,11 @@ export interface AttachmentInfo {
 
 export interface SendResult {
   messageId: string;
+  success: boolean;
+}
+
+export interface DraftResult {
+  uid?: number;
+  folder: string;
   success: boolean;
 }

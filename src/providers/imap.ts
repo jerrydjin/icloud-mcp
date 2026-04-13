@@ -184,6 +184,7 @@ export class ImapProvider {
 
       const toAddresses: EmailAddress[] = this.parseAddressList(parsed.to);
       const ccAddresses: EmailAddress[] = this.parseAddressList(parsed.cc);
+      const bccAddresses: EmailAddress[] = this.parseAddressList(parsed.bcc);
 
       const attachments = (parsed.attachments ?? []).map((att) => ({
         filename: att.filename ?? "unnamed",
@@ -200,6 +201,7 @@ export class ImapProvider {
         },
         to: toAddresses,
         cc: ccAddresses,
+        bcc: bccAddresses,
         date: parsed.date?.toISOString() ?? new Date().toISOString(),
         textBody,
         htmlBody: parsed.html || undefined,
@@ -228,6 +230,7 @@ export class ImapProvider {
     try {
       const searchCriteria: Record<string, unknown> = {};
 
+      if (criteria.text) searchCriteria.text = criteria.text;
       if (criteria.from) searchCriteria.from = criteria.from;
       if (criteria.to) searchCriteria.to = criteria.to;
       if (criteria.subject) searchCriteria.subject = criteria.subject;
@@ -330,6 +333,16 @@ export class ImapProvider {
   async createFolder(name: string): Promise<void> {
     await this.ensureConnected();
     await this.client.mailboxCreate(name);
+  }
+
+  async append(
+    folder: string,
+    rawMessage: Buffer,
+    flags?: string[]
+  ): Promise<{ uid?: number }> {
+    await this.ensureConnected();
+    const result = await this.client.append(folder, rawMessage, flags ?? []);
+    return { uid: (result as { uid?: number })?.uid };
   }
 
   async deleteFolder(name: string): Promise<void> {

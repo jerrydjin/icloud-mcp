@@ -144,6 +144,206 @@ export function registerWriteTools(
   );
 
   server.tool(
+    "create_draft",
+    "Save an email draft to the Drafts folder for review before sending. Use send_draft to send it later.",
+    {
+      to: z
+        .union([z.string(), z.array(z.string())])
+        .describe("Recipient email address(es)"),
+      subject: z.string().describe("Email subject"),
+      body: z.string().describe("Email body text"),
+      from: z.string().optional().describe("Send from this address (must be an alias configured on your iCloud account). Defaults to primary iCloud email."),
+      fromName: z.string().optional().describe("Display name for the From header (e.g. 'Jerry Jin'). If omitted, sends with bare address."),
+      cc: z.array(z.string()).optional().describe("CC recipients"),
+      bcc: z.array(z.string()).optional().describe("BCC recipients"),
+    },
+    async ({ to, subject, body, from, fromName, cc, bcc }) => {
+      try {
+        const rawMessage = await smtpProvider.buildRawMessage({
+          to, subject, body, from, fromName, cc, bcc,
+        });
+        const result = await imapProvider.append("Drafts", rawMessage, [
+          "\\Draft",
+          "\\Seen",
+        ]);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                { uid: result.uid, folder: "Drafts", success: true },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Failed to create draft: ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.tool(
+    "create_reply_draft",
+    "Save a reply draft to the Drafts folder. Quotes the original message and sets threading headers. Use send_draft to send it later.",
+    {
+      uid: z.number().describe("UID of the message to reply to"),
+      folder: z
+        .string()
+        .optional()
+        .default("INBOX")
+        .describe("Folder containing the original message"),
+      body: z.string().describe("Reply text (original will be quoted below)"),
+      from: z.string().optional().describe("Send from this alias address. Defaults to primary iCloud email."),
+      fromName: z.string().optional().describe("Display name for the From header (e.g. 'Jerry Jin'). If omitted, sends with bare address."),
+      replyAll: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe("Reply to all recipients"),
+    },
+    async ({ uid, folder, body, from, fromName, replyAll }) => {
+      try {
+        const original = await imapProvider.fetchAndParseMessage(uid, folder);
+
+        const subject = original.subject.replace(/^(Re:\s*)+/i, "");
+        const replySubject = `Re: ${subject}`;
+
+        const quotedLines = original.textBody
+          .split("\n")
+          .map((line) => `> ${line}`);
+        const fullBody = `${body}\n\n${quotedLines.join("\n")}`;
+
+        let to: string[];
+        if (replyAll) {
+          const allRecipients = [
+            original.from.address,
+            ...original.to.map((a) => a.address),
+            ...original.cc.map((a) => a.address),
+          ].filter(Boolean);
+          to = [...new Set(allRecipients)];
+        } else {
+          to = [original.from.address];
+        }
+
+        const references = [...(original.references ?? [])];
+        if (original.messageId) references.push(original.messageId);
+
+        const rawMessage = await smtpProvider.buildRawMessage({
+          to,
+          subject: replySubject,
+          body: fullBody,
+          from,
+          fromName,
+          inReplyTo: original.messageId,
+          references,
+        });
+        const result = await imapProvider.append("Drafts", rawMessage, [
+          "\\Draft",
+          "\\Seen",
+        ]);
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                { uid: result.uid, folder: "Drafts", success: true },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Failed to create reply draft: ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.tool(
+    "send_draft",
+    "Send an existing draft from the Drafts folder via SMTP, then remove it from Drafts.",
+    {
+      uid: z.number().describe("UID of the draft message in the Drafts folder"),
+      from: z.string().optional().describe("Override the From address. Defaults to the address in the draft."),
+      fromName: z.string().optional().describe("Override the display name. Defaults to the name in the draft."),
+    },
+    async ({ uid, from, fromName }) => {
+      try {
+        const draft = await imapProvider.fetchAndParseMessage(uid, "Drafts");
+
+        const to = draft.to.map((a) => a.address).filter(Boolean);
+        if (to.length === 0) {
+          return {
+            content: [
+              { type: "text" as const, text: "Draft has no recipients." },
+            ],
+            isError: true,
+          };
+        }
+
+        const cc = draft.cc.map((a) => a.address).filter(Boolean);
+        const bcc = draft.bcc.map((a) => a.address).filter(Boolean);
+
+        const result = await smtpProvider.send({
+          to,
+          subject: draft.subject,
+          body: draft.textBody,
+          from: from ?? draft.from.address,
+          fromName: fromName ?? (draft.from.name || undefined),
+          cc: cc.length > 0 ? cc : undefined,
+          bcc: bcc.length > 0 ? bcc : undefined,
+          inReplyTo: draft.inReplyTo,
+          references: draft.references,
+        });
+
+        // Remove draft after successful send
+        await imapProvider.deleteMessage(uid, "Drafts");
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        const isConnectionError =
+          msg.includes("ECONNRESET") ||
+          msg.includes("ETIMEDOUT") ||
+          msg.includes("socket");
+        const errorText = isConnectionError
+          ? `Send may have failed — check your Sent folder before resending. Draft kept in Drafts. Error: ${msg}`
+          : `Failed to send draft: ${msg}`;
+        return {
+          content: [{ type: "text" as const, text: errorText }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.tool(
     "forward_message",
     "Forward an email message to new recipients. v1 forwards text content only (no attachments).",
     {
