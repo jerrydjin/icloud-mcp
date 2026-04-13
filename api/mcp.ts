@@ -46,7 +46,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (provided !== expected) {
       res.status(401).json({
         jsonrpc: "2.0",
-        error: { code: -32001, message: "Unauthorized" },
+        error: {
+          code: -32001,
+          message: "Unauthorized",
+          data: {
+            expectedLength: expected.length,
+            providedLength: provided.length,
+            expectedPrefix: expected.slice(0, 4),
+            providedPrefix: provided.slice(0, 4),
+            hasAuthHeader: !!req.headers.authorization,
+          },
+        },
         id: null,
       });
       return;
