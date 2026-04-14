@@ -1,5 +1,8 @@
 /*
- * iCloud Mail MCP Server
+ * iCloud Bridge MCP Server (v2)
+ *
+ * Unified MCP server for iCloud Mail + Calendar.
+ * Same app-specific password authenticates IMAP, SMTP, and CalDAV.
  *
  * Dependency graph:
  *
@@ -9,35 +12,33 @@
  * └──────┬───────┘
  *        │ creates + passes
  *        ▼
- * ┌──────────────┐     ┌──────────────┐
- * │ ImapProvider  │     │ SmtpProvider  │
- * │ (imap.ts)    │     │ (smtp.ts)    │
- * └──────────────┘     └──────────────┘
- *        ▲                    ▲
- *        │ uses               │ uses
- *        └────────┬───────────┘
- *          ┌──────┴───────┐
- *          │  tools/*.ts  │
- *          │  read.ts     │
- *          │  write.ts    │
- *          │  manage.ts   │
+ * ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+ * │ ImapProvider  │  │ SmtpProvider  │  │ CalDavProvider│
+ * │ (imap.ts)    │  │ (smtp.ts)    │  │ (caldav.ts)  │
+ * └──────────────┘  └──────────────┘  └──────────────┘
+ *        ▲                 ▲                 ▲
+ *        │ uses            │ uses            │ uses
+ *        └────────┬────────┴────────┬────────┘
+ *          ┌──────┴───────┐  ┌──────┴───────┐
+ *          │  tools/*.ts  │  │  tools/*.ts  │
+ *          │  read.ts     │  │  calendar.ts │
+ *          │  write.ts    │  │  cross.ts    │
+ *          │  manage.ts   │  └──────────────┘
  *          └──────────────┘
  */
 
-import dotenv from "dotenv";
-import path from "path";
-import { fileURLToPath } from "url";
+// Bun loads .env automatically (no dotenv needed)
 
-// Load .env from project root regardless of cwd
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ImapProvider } from "./providers/imap.ts";
 import { SmtpProvider } from "./providers/smtp.ts";
+import { CalDavProvider } from "./providers/caldav.ts";
 import { registerReadTools } from "./tools/read.ts";
 import { registerWriteTools } from "./tools/write.ts";
 import { registerManageTools } from "./tools/manage.ts";
+import { registerCalendarTools } from "./tools/calendar.ts";
+import { registerCrossTools } from "./tools/cross.ts";
 
 // Validate required environment variables
 const email = process.env.ICLOUD_EMAIL;
@@ -46,6 +47,7 @@ const imapHost = process.env.IMAP_HOST ?? "imap.mail.me.com";
 const imapPort = Number(process.env.IMAP_PORT ?? "993");
 const smtpHost = process.env.SMTP_HOST ?? "smtp.mail.me.com";
 const smtpPort = Number(process.env.SMTP_PORT ?? "587");
+const caldavUrl = process.env.CALDAV_URL ?? "https://caldav.icloud.com";
 
 if (!email || !password) {
   console.error(
@@ -57,21 +59,26 @@ if (!email || !password) {
 // Create providers
 const imapProvider = new ImapProvider(imapHost, imapPort, email, password);
 const smtpProvider = new SmtpProvider(smtpHost, smtpPort, email, password);
+const caldavProvider = new CalDavProvider(caldavUrl, email, password);
 
 // Create MCP server
 const server = new McpServer({
-  name: "icloud-mail",
-  version: "1.0.0",
+  name: "icloud-bridge",
+  version: "2.0.0",
 });
 
 // Register all tools
 registerReadTools(server, imapProvider, email);
 registerWriteTools(server, imapProvider, smtpProvider);
 registerManageTools(server, imapProvider);
+registerCalendarTools(server, caldavProvider);
+registerCrossTools(server, imapProvider, smtpProvider, caldavProvider, email);
 
 // Graceful shutdown
 async function shutdown() {
   await imapProvider.disconnect();
+  await smtpProvider.disconnect();
+  await caldavProvider.disconnect();
   process.exit(0);
 }
 
