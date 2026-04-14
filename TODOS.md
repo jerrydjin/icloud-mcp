@@ -6,11 +6,20 @@
 **Context:** imapflow supports IDLE natively. Requires switching from stdio to SSE transport since stdio is request-response only. The cross-model second opinion called this the "coolest version not yet considered."
 **Depends on:** v1 complete and working. SSE transport support in MCP SDK.
 
-## v2: Provider interface abstraction for ecosystem bridge
-**What:** Define an abstract provider interface (connect, disconnect, list, read, search, write) that IMAP/SMTP implements and future CalDAV/CardDAV providers would implement.
-**Why:** The "Apple ecosystem bridge" vision (Calendar, Contacts, Reminders) depends on the tool layer being provider-agnostic. Without a concrete interface, adding CalDAV may require rewriting the tool layer.
-**Context:** Current design has concrete ImapProvider and SmtpProvider classes. The file structure (src/providers/) supports modularity, but there's no TypeScript interface enforcing the contract. Sketch the interface after v1 ships, then validate by prototyping a CalDAV provider.
-**Depends on:** v1 complete. Understanding of CalDAV protocol (transfers from IMAP learning).
+## ~~v2: Provider interface abstraction for ecosystem bridge~~ DONE
+Shipped in v2.0.0. ServiceProvider interface in types.ts, implemented by ImapProvider, SmtpProvider, CalDavProvider.
+
+## v3: Tool namespacing
+**What:** Namespace MCP tools by service (e.g. `mail_list_messages`, `cal_list_events`) instead of flat names.
+**Why:** v2 ships 23 tools. When Contacts/Reminders push past 30, flat naming gets confusing for Claude and users. Namespacing makes tool discovery predictable.
+**Context:** Current flat naming works fine at 23 tools. Revisit when adding CardDAV (Contacts) or VTODO (Reminders) providers.
+**Depends on:** A 4th provider being planned.
+
+## v3: update_event with ETag conditional PUT
+**What:** Add an `update_event` tool that modifies existing calendar events using CalDAV conditional PUT with If-Match ETag.
+**Why:** Users want to reschedule, add attendees, change descriptions on existing events. Currently they must delete + recreate.
+**Context:** CalendarEvent already stores `etag` (added in v2). The ETag enables optimistic concurrency: PUT with If-Match header, server rejects if another client modified the event. Requires building a VCALENDAR diff (merge existing fields with updates) rather than full replacement. ical.js handles both parsing and generation.
+**Depends on:** v2 Calendar tools shipped and stable.
 
 ## v2: Semantic search via embedding index
 **What:** Build a local embedding index of email content so users can search by meaning ("emails about money I owe") rather than exact keywords ("invoice").
