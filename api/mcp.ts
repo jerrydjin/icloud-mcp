@@ -3,13 +3,17 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { ImapProvider } from "../src/providers/imap.js";
 import { SmtpProvider } from "../src/providers/smtp.js";
+import { CalDavProvider } from "../src/providers/caldav.js";
 import { registerReadTools } from "../src/tools/read.js";
 import { registerWriteTools } from "../src/tools/write.js";
 import { registerManageTools } from "../src/tools/manage.js";
+import { registerCalendarTools } from "../src/tools/calendar.js";
+import { registerCrossTools } from "../src/tools/cross.js";
 
 function createServer(): {
   server: McpServer;
   imapProvider: ImapProvider;
+  caldavProvider: CalDavProvider;
 } {
   const email = process.env.ICLOUD_EMAIL;
   const password = process.env.ICLOUD_APP_PASSWORD;
@@ -17,6 +21,7 @@ function createServer(): {
   const imapPort = Number(process.env.IMAP_PORT ?? "993");
   const smtpHost = process.env.SMTP_HOST ?? "smtp.mail.me.com";
   const smtpPort = Number(process.env.SMTP_PORT ?? "587");
+  const caldavUrl = process.env.CALDAV_URL ?? "https://caldav.icloud.com";
 
   if (!email || !password) {
     throw new Error("Missing ICLOUD_EMAIL or ICLOUD_APP_PASSWORD");
@@ -24,17 +29,20 @@ function createServer(): {
 
   const imapProvider = new ImapProvider(imapHost, imapPort, email, password);
   const smtpProvider = new SmtpProvider(smtpHost, smtpPort, email, password);
+  const caldavProvider = new CalDavProvider(caldavUrl, email, password);
 
   const server = new McpServer({
-    name: "icloud-mail",
-    version: "1.0.0",
+    name: "icloud-bridge",
+    version: "2.0.0",
   });
 
   registerReadTools(server, imapProvider, email);
   registerWriteTools(server, imapProvider, smtpProvider);
   registerManageTools(server, imapProvider);
+  registerCalendarTools(server, caldavProvider);
+  registerCrossTools(server, imapProvider, smtpProvider, caldavProvider, email);
 
-  return { server, imapProvider };
+  return { server, imapProvider, caldavProvider };
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -54,7 +62,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   if (req.method === "POST") {
-    const { server, imapProvider } = createServer();
+    const { server, imapProvider, caldavProvider } = createServer();
 
     try {
       const transport = new StreamableHTTPServerTransport({
@@ -74,6 +82,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     } finally {
       await imapProvider.disconnect();
+      await caldavProvider.disconnect();
     }
   } else if (req.method === "GET" || req.method === "DELETE") {
     res.status(405).json({
