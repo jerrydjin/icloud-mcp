@@ -1,11 +1,11 @@
 import nodemailer from "nodemailer";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
-import type { SendResult } from "../types.ts";
+import type { ServiceProvider, SendResult } from "../types.ts";
 
 // SMTP sends are NEVER retried automatically. If the connection drops mid-send,
 // the server may have already accepted the email. Retrying risks duplicate delivery.
 
-export class SmtpProvider {
+export class SmtpProvider implements ServiceProvider {
   private transporter: nodemailer.Transporter;
   private email: string;
 
@@ -23,6 +23,11 @@ export class SmtpProvider {
       auth: { user: email, pass: password },
     });
   }
+
+  // ServiceProvider lifecycle (no-ops: nodemailer manages connections internally)
+  async connect(): Promise<void> {}
+  async disconnect(): Promise<void> {}
+  async ensureConnected(): Promise<void> {}
 
   get defaultEmail(): string {
     return this.email;

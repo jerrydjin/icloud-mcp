@@ -1,6 +1,7 @@
 import { ImapFlow } from "imapflow";
 import { simpleParser, type ParsedMail } from "mailparser";
 import type {
+  ServiceProvider,
   FolderInfo,
   MessageSummary,
   MessageFull,
@@ -12,7 +13,7 @@ import type {
 // from prior tool calls may point to different messages. Revisit if this
 // becomes a shared tool.
 
-export class ImapProvider {
+export class ImapProvider implements ServiceProvider {
   private client: ImapFlow;
   private connected = false;
   private noopInterval: ReturnType<typeof setInterval> | null = null;
@@ -59,7 +60,7 @@ export class ImapProvider {
     }
   }
 
-  private async ensureConnected(): Promise<void> {
+  async ensureConnected(): Promise<void> {
     if (!this.connected) {
       await this.connect();
     }
