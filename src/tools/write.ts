@@ -33,11 +33,21 @@ export function registerWriteTools(
           cc,
           bcc,
         });
+
+        // Append to Sent Messages so iCloud shows the sent email
+        if (result.rawMessage) {
+          try {
+            await imapProvider.append("Sent Messages", result.rawMessage, ["\\Seen"]);
+          } catch {
+            // Email was already sent; don't fail the tool if the copy fails
+          }
+        }
+
         return {
           content: [
             {
               type: "text" as const,
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify({ messageId: result.messageId, success: true }, null, 2),
             },
           ],
         };
@@ -121,11 +131,19 @@ export function registerWriteTools(
           references,
         });
 
+        if (result.rawMessage) {
+          try {
+            await imapProvider.append("Sent Messages", result.rawMessage, ["\\Seen"]);
+          } catch {
+            // Email was already sent; don't fail if the copy fails
+          }
+        }
+
         return {
           content: [
             {
               type: "text" as const,
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify({ messageId: result.messageId, success: true }, null, 2),
             },
           ],
         };
@@ -315,6 +333,14 @@ export function registerWriteTools(
           references: draft.references,
         });
 
+        if (result.rawMessage) {
+          try {
+            await imapProvider.append("Sent Messages", result.rawMessage, ["\\Seen"]);
+          } catch {
+            // Email was already sent; don't fail if the copy fails
+          }
+        }
+
         // Remove draft after successful send
         await imapProvider.deleteMessage(uid, "Drafts");
 
@@ -322,7 +348,7 @@ export function registerWriteTools(
           content: [
             {
               type: "text" as const,
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify({ messageId: result.messageId, success: true }, null, 2),
             },
           ],
         };
@@ -392,11 +418,19 @@ export function registerWriteTools(
           fromName,
         });
 
+        if (result.rawMessage) {
+          try {
+            await imapProvider.append("Sent Messages", result.rawMessage, ["\\Seen"]);
+          } catch {
+            // Email was already sent; don't fail if the copy fails
+          }
+        }
+
         return {
           content: [
             {
               type: "text" as const,
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify({ messageId: result.messageId, success: true }, null, 2),
             },
           ],
         };

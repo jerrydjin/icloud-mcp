@@ -44,25 +44,24 @@ export class SmtpProvider implements ServiceProvider {
     inReplyTo?: string;
     references?: string[];
   }): Promise<SendResult> {
+    // Build raw RFC822 message once, send it as-is, and return it for IMAP append.
+    // This ensures the Sent Messages copy is byte-identical to what was delivered.
+    const rawMessage = await this.buildRawMessage(options);
     const to = Array.isArray(options.to) ? options.to.join(", ") : options.to;
-    const address = options.from ?? this.email;
-    const fromHeader = options.fromName
-      ? `${options.fromName} <${address}>`
-      : address;
     const info = await this.transporter.sendMail({
-      from: fromHeader,
-      to,
-      cc: options.cc?.join(", "),
-      bcc: options.bcc?.join(", "),
-      subject: options.subject,
-      text: options.body,
-      inReplyTo: options.inReplyTo,
-      references: options.references?.join(" "),
+      envelope: {
+        from: options.from ?? this.email,
+        to,
+        cc: options.cc?.join(", "),
+        bcc: options.bcc?.join(", "),
+      },
+      raw: rawMessage,
     });
 
     return {
       messageId: info.messageId,
       success: true,
+      rawMessage,
     };
   }
 

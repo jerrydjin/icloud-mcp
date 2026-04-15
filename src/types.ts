@@ -45,6 +45,7 @@ export interface AttachmentInfo {
 export interface SendResult {
   messageId: string;
   success: boolean;
+  rawMessage?: Buffer;
 }
 
 export interface DraftResult {
