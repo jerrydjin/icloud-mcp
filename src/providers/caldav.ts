@@ -22,6 +22,11 @@ import { buildRRule, weekdayOfStart } from "../utils/rrule.js";
 
 type DAVClientInstance = Awaited<ReturnType<typeof createDAVClient>>;
 
+function isUtcTimezone(tz: string): boolean {
+  const t = tz.toLowerCase();
+  return t === "utc" || t === "etc/utc" || t === "gmt" || t === "etc/gmt";
+}
+
 export class CalDavProvider implements ServiceProvider {
   private client: DAVClientInstance | null = null;
   private connected = false;
@@ -199,7 +204,13 @@ export class CalDavProvider implements ServiceProvider {
     const vevent = new ICAL.Component("vevent");
     vevent.updatePropertyWithValue("uid", uid);
     vevent.updatePropertyWithValue("summary", event.summary);
-    vevent.updatePropertyWithValue("dtstamp", ICAL.Time.now());
+    // DTSTAMP/CREATED/LAST-MODIFIED MUST be UTC per RFC 5545.
+    const nowStamp = ICAL.Time.fromJSDate(new Date(), true);
+    vevent.updatePropertyWithValue("dtstamp", nowStamp);
+    // iCloud expects these on recurring events; harmless for single events.
+    vevent.updatePropertyWithValue("created", nowStamp);
+    vevent.updatePropertyWithValue("last-modified", nowStamp);
+    vevent.updatePropertyWithValue("sequence", 0);
 
     if (event.isAllDay) {
       // All-day events: DATE-only, no timezone (per RFC 5545)
@@ -211,6 +222,19 @@ export class CalDavProvider implements ServiceProvider {
 
       const endTime = ICAL.Time.fromDateString(endStr);
       endTime.isDate = true;
+      vevent.updatePropertyWithValue("dtend", endTime);
+    } else if (isUtcTimezone(timezone)) {
+      // UTC events: emit as Z-suffix DATE-TIME with no TZID or VTIMEZONE.
+      // Avoids TZID/VTIMEZONE name mismatches (UTC vs Etc/UTC) that iCloud
+      // rejects for recurring events.
+      const startStr = event.start.replace(/Z$/, "");
+      const endStr = event.end.replace(/Z$/, "");
+      const startTime = ICAL.Time.fromDateTimeString(startStr);
+      startTime.zone = ICAL.Timezone.utcTimezone;
+      vevent.updatePropertyWithValue("dtstart", startTime);
+
+      const endTime = ICAL.Time.fromDateTimeString(endStr);
+      endTime.zone = ICAL.Timezone.utcTimezone;
       vevent.updatePropertyWithValue("dtend", endTime);
     } else {
       // Register timezone and add VTIMEZONE to VCALENDAR
@@ -292,9 +316,17 @@ export class CalDavProvider implements ServiceProvider {
       } catch {
         /* ignore */
       }
+      // Include a VEVENT excerpt so failures are diagnosable without server logs.
+      const veventExcerpt = iCalString
+        .split(/\r?\n/)
+        .filter((l) =>
+          /^(UID|SUMMARY|DTSTART|DTEND|RRULE|SEQUENCE|TZID)/i.test(l)
+        )
+        .join(" | ");
       throw new Error(
         `CalDAV PUT rejected (status ${response.status} ${response.statusText}${etag ? "" : ", no ETag"}). ` +
-          `Response: ${body.slice(0, 500) || "<empty>"}`
+          `Response: ${body.slice(0, 500) || "<empty>"}. ` +
+          `VEVENT: ${veventExcerpt}`
       );
     }
     const resultUrl = response.url || `${calendarUrl}${uid}.ics`;
