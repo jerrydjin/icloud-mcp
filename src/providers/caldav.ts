@@ -12,7 +12,9 @@ import {
   resolveTimezone,
   registerTimezone,
   buildVTimezone,
+  localToUtc,
 } from "../utils/timezone.js";
+import { buildRRule } from "../utils/rrule.js";
 
 // CalDAV is stateless HTTP with Basic auth per request.
 // No persistent connection, no keepalive, no NOOP equivalent.
@@ -231,6 +233,13 @@ export class CalDavProvider implements ServiceProvider {
       vevent.getFirstProperty("dtend")!.setParameter("tzid", timezone);
     }
 
+    let rruleStr: string | undefined;
+    if (event.recurrence) {
+      rruleStr = buildRRule(event.recurrence, timezone, !!event.isAllDay);
+      const recur = ICAL.Recur.fromString(rruleStr);
+      vevent.updatePropertyWithValue("rrule", recur);
+    }
+
     if (event.location) {
       vevent.updatePropertyWithValue("location", event.location);
     }
@@ -268,8 +277,8 @@ export class CalDavProvider implements ServiceProvider {
       startTz = { utc: event.start.split("T")[0] ?? event.start, timezone };
       endTz = { utc: event.end.split("T")[0] ?? event.end, timezone };
     } else {
-      startTz = { utc: this.localToUtc(event.start, timezone), timezone };
-      endTz = { utc: this.localToUtc(event.end, timezone), timezone };
+      startTz = { utc: localToUtc(event.start, timezone), timezone };
+      endTz = { utc: localToUtc(event.end, timezone), timezone };
     }
 
     return {
@@ -285,22 +294,12 @@ export class CalDavProvider implements ServiceProvider {
       })),
       status: "CONFIRMED",
       isAllDay: event.isAllDay ?? false,
+      recurrenceRule: rruleStr,
       calendarUrl,
       calendarName,
       url: (resultObj?.url as string) ?? `${calendarUrl}${uid}.ics`,
       etag: resultObj?.etag as string | undefined,
     };
-  }
-
-  /**
-   * Convert a local time string in a given timezone to a UTC ISO string.
-   */
-  private localToUtc(localISO: string, timezone: string): string {
-    // Use ical.js to do the conversion via the registered timezone
-    const icalTz = registerTimezone(timezone);
-    const time = ICAL.Time.fromDateTimeString(localISO.replace(/Z$/, ""));
-    time.zone = icalTz;
-    return time.toJSDate().toISOString();
   }
 
   async deleteEvent(calendarUrl: string, uid: string): Promise<boolean> {

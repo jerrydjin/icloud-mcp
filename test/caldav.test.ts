@@ -6,7 +6,9 @@ import {
   formatInTimezone,
   buildVTimezone,
   registerTimezone,
+  localToUtc,
 } from "../src/utils/timezone.js";
+import { buildRRule } from "../src/utils/rrule.js";
 
 // ── VTODO Filtering ──
 // Mirrors the filter in CalDavProvider.listCalendars()
@@ -536,5 +538,131 @@ describe("VCALENDAR generation with timezone", () => {
     expect(parsed!.start.timezone).toBe("Australia/Melbourne");
     // 3pm AEST (+10) = 5am UTC
     expect(parsed!.start.utc).toBe("2026-04-15T05:00:00.000Z");
+  });
+});
+
+// ── VEVENT generation with RRULE (create side) ──
+// Mirrors the approach used in CalDavProvider.createEvent():
+// build a VEVENT, attach an ICAL.Recur rrule, serialize, then verify
+// occurrences expand correctly via ICAL.Event.iterator().
+
+function buildVeventWithRrule(
+  timezone: string,
+  startLocal: string,
+  endLocal: string,
+  rruleStr: string
+): string {
+  const icalTz = registerTimezone(timezone);
+  const vtimezoneStr = buildVTimezone(timezone);
+
+  const vcalendar = new ICAL.Component(["vcalendar", [], []]);
+  vcalendar.updatePropertyWithValue("prodid", "-//test//EN");
+  vcalendar.updatePropertyWithValue("version", "2.0");
+  vcalendar.addSubcomponent(ICAL.Component.fromString(vtimezoneStr));
+
+  const vevent = new ICAL.Component("vevent");
+  vevent.updatePropertyWithValue("uid", "rrule-test-001");
+  vevent.updatePropertyWithValue("summary", "Standup");
+
+  const startTime = ICAL.Time.fromDateTimeString(startLocal);
+  startTime.zone = icalTz;
+  vevent.updatePropertyWithValue("dtstart", startTime);
+  vevent.getFirstProperty("dtstart")!.setParameter("tzid", timezone);
+
+  const endTime = ICAL.Time.fromDateTimeString(endLocal);
+  endTime.zone = icalTz;
+  vevent.updatePropertyWithValue("dtend", endTime);
+  vevent.getFirstProperty("dtend")!.setParameter("tzid", timezone);
+
+  const recur = ICAL.Recur.fromString(rruleStr);
+  vevent.updatePropertyWithValue("rrule", recur);
+
+  vcalendar.addSubcomponent(vevent);
+  return vcalendar.toString();
+}
+
+describe("create-side RRULE", () => {
+  test("WEEKLY BYDAY with COUNT expands to expected weekdays", () => {
+    const rrule = buildRRule(
+      {
+        frequency: "WEEKLY",
+        endType: "after",
+        count: 6,
+        byWeekday: ["MO", "WE", "FR"],
+      },
+      "Australia/Melbourne",
+      false
+    );
+    // 2026-04-13 is a Monday
+    const ics = buildVeventWithRrule(
+      "Australia/Melbourne",
+      "2026-04-13T09:00:00",
+      "2026-04-13T09:15:00",
+      rrule
+    );
+
+    const jcal = ICAL.parse(ics);
+    const comp = new ICAL.Component(jcal);
+    const vevent = comp.getFirstSubcomponent("vevent")!;
+    const event = new ICAL.Event(vevent);
+    const iterator = event.iterator();
+
+    const occs: Date[] = [];
+    let next = iterator.next();
+    while (next && occs.length < 20) {
+      occs.push(next.toJSDate());
+      next = iterator.next();
+    }
+
+    expect(occs).toHaveLength(6);
+    // Mon 13, Wed 15, Fri 17, Mon 20, Wed 22, Fri 24 in Australia/Melbourne (AEST, +10 in April).
+    // 9am Melbourne = 23:00 UTC the prior day, so UTC-date is one less.
+    const days = occs.map((d) => d.getUTCDate());
+    expect(days).toEqual([12, 14, 16, 19, 21, 23]);
+    // And each occurrence's UTC weekday should be Sun/Tue/Thu
+    const weekdays = occs.map((d) => d.getUTCDay());
+    expect(weekdays).toEqual([0, 2, 4, 0, 2, 4]);
+  });
+
+  test("DAILY with UTC-converted UNTIL stops at the right instant", () => {
+    const rrule = buildRRule(
+      {
+        frequency: "DAILY",
+        endType: "on",
+        until: "2026-04-17T09:00:00",
+      },
+      "Australia/Melbourne",
+      false
+    );
+    const ics = buildVeventWithRrule(
+      "Australia/Melbourne",
+      "2026-04-13T09:00:00",
+      "2026-04-13T09:15:00",
+      rrule
+    );
+
+    const jcal = ICAL.parse(ics);
+    const comp = new ICAL.Component(jcal);
+    const vevent = comp.getFirstSubcomponent("vevent")!;
+    const event = new ICAL.Event(vevent);
+    const iterator = event.iterator();
+
+    const occs: Date[] = [];
+    let next = iterator.next();
+    while (next && occs.length < 20) {
+      occs.push(next.toJSDate());
+      next = iterator.next();
+    }
+
+    // 13, 14, 15, 16, 17 = 5 occurrences inclusive of UNTIL
+    expect(occs).toHaveLength(5);
+    expect(occs[0]!.toISOString()).toContain("2026-04-12T23:00:00");
+  });
+
+  test("localToUtc utility converts Melbourne time to UTC", () => {
+    // 2026-04-15 3pm Melbourne (AEST, +10) = 5am UTC
+    expect(localToUtc("2026-04-15T15:00:00", "Australia/Melbourne")).toBe(
+      "2026-04-15T05:00:00.000Z"
+    );
   });
 });

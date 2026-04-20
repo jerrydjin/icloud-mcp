@@ -98,6 +98,18 @@ export interface EventAttendee {
   status?: string; // ACCEPTED, DECLINED, TENTATIVE, NEEDS-ACTION
 }
 
+export type RecurrenceFrequency = "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY";
+export type RecurrenceWeekday = "MO" | "TU" | "WE" | "TH" | "FR" | "SA" | "SU";
+
+export interface RecurrenceInput {
+  frequency: RecurrenceFrequency;
+  interval?: number; // default 1
+  endType: "never" | "after" | "on";
+  count?: number; // required when endType="after"
+  until?: string; // required when endType="on"; ISO local date or datetime
+  byWeekday?: RecurrenceWeekday[]; // WEEKLY only
+}
+
 export interface CreateEventInput {
   summary: string;
   start: string; // ISO 8601 local time (no Z suffix when timezone provided)
@@ -108,4 +120,5 @@ export interface CreateEventInput {
   attendees?: string[]; // email addresses
   isAllDay?: boolean;
   calendar?: string; // display name or URL, default: first VEVENT calendar
+  recurrence?: RecurrenceInput;
 }

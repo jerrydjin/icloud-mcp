@@ -59,6 +59,16 @@ export function registerTimezone(timezone: string): ICAL.Timezone {
 }
 
 /**
+ * Convert a local time string in a given timezone to a UTC ISO string.
+ */
+export function localToUtc(localISO: string, timezone: string): string {
+  const icalTz = registerTimezone(timezone);
+  const time = ICAL.Time.fromDateTimeString(localISO.replace(/Z$/, ""));
+  time.zone = icalTz;
+  return time.toJSDate().toISOString();
+}
+
+/**
  * Validate that a string is a valid IANA timezone identifier.
  */
 export function validateTimezone(tz: string): void {

@@ -4,6 +4,55 @@ import type { CalDavProvider } from "../providers/caldav.js";
 import type { CalendarEvent } from "../types.js";
 import { resolveTimezone, formatInTimezone } from "../utils/timezone.js";
 
+const RecurrenceSchema = z
+  .object({
+    frequency: z.enum(["DAILY", "WEEKLY", "MONTHLY", "YEARLY"]),
+    interval: z
+      .number()
+      .int()
+      .positive()
+      .max(365)
+      .optional()
+      .describe("Repeat every N units of frequency (default 1)"),
+    endType: z
+      .enum(["never", "after", "on"])
+      .describe(
+        "How the recurrence ends: 'never' (no end), 'after' (count), or 'on' (until)"
+      ),
+    count: z
+      .number()
+      .int()
+      .positive()
+      .max(1000)
+      .optional()
+      .describe("Number of occurrences when endType='after'"),
+    until: z
+      .string()
+      .optional()
+      .describe(
+        "ISO local date or datetime when endType='on'. Interpreted in the event's timezone."
+      ),
+    byWeekday: z
+      .array(z.enum(["MO", "TU", "WE", "TH", "FR", "SA", "SU"]))
+      .optional()
+      .describe(
+        "Weekdays to repeat on (WEEKLY only). E.g., ['MO','WE','FR']."
+      ),
+  })
+  .refine((r) => r.endType !== "after" || r.count != null, {
+    message: "recurrence.endType='after' requires count",
+  })
+  .refine((r) => r.endType !== "on" || r.until != null, {
+    message: "recurrence.endType='on' requires until",
+  })
+  .refine((r) => !(r.count != null && r.until != null), {
+    message: "count and until are mutually exclusive (RFC 5545)",
+  })
+  .refine(
+    (r) => !r.byWeekday?.length || r.frequency === "WEEKLY",
+    { message: "byWeekday is only supported with frequency='WEEKLY'" }
+  );
+
 function formatEventForDisplay(event: CalendarEvent, displayTimezone: string) {
   return {
     ...event,
@@ -229,8 +278,11 @@ export function registerCalendarTools(
         .optional()
         .default(false)
         .describe("Whether this is an all-day event"),
+      recurrence: RecurrenceSchema.optional().describe(
+        "Make this a repeating event. Provide frequency + endType, plus count (for endType='after') or until (for endType='on'). Omit for a single event."
+      ),
     },
-    async ({ summary, start, end, calendar, timezone, location, description, attendees, isAllDay }) => {
+    async ({ summary, start, end, calendar, timezone, location, description, attendees, isAllDay, recurrence }) => {
       try {
         const calendarUrl = await caldavProvider.resolveCalendarUrl(calendar);
         const event = await caldavProvider.createEvent(calendarUrl, {
@@ -243,6 +295,7 @@ export function registerCalendarTools(
           attendees,
           isAllDay,
           calendar,
+          recurrence,
         });
 
         const displayTz = resolveTimezone(timezone);
