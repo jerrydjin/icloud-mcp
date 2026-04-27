@@ -197,7 +197,7 @@ export class CalDavProvider implements ServiceProvider {
 
     // Build VCALENDAR with VTIMEZONE component
     const comp = new ICAL.Component(["vcalendar", [], []]);
-    comp.updatePropertyWithValue("prodid", "-//icloud-bridge//v2.0.0//EN");
+    comp.updatePropertyWithValue("prodid", "-//icloud-mcp//v2.0.0//EN");
     comp.updatePropertyWithValue("version", "2.0");
     comp.updatePropertyWithValue("calscale", "GREGORIAN");
 

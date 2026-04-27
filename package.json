@@ -1,5 +1,5 @@
 {
-  "name": "icloud-mail-mcp",
+  "name": "icloud-mcp",
   "module": "src/server.ts",
   "type": "module",
   "private": true,

@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "icloud-mail-mcp",
+      "name": "icloud-mcp",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.29.0",
         "ical.js": "^2.2.1",

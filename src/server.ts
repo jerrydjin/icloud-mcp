@@ -1,5 +1,5 @@
 /*
- * iCloud Bridge MCP Server (v2)
+ * iCloud MCP Server (v2)
  *
  * Unified MCP server for iCloud Mail + Calendar.
  * Same app-specific password authenticates IMAP, SMTP, and CalDAV.
@@ -63,7 +63,7 @@ const caldavProvider = new CalDavProvider(caldavUrl, email, password);
 
 // Create MCP server
 const server = new McpServer({
-  name: "icloud-bridge",
+  name: "icloud-mcp",
   version: "2.0.0",
 });
 

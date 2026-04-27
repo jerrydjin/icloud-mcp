@@ -1,4 +1,4 @@
-# icloud-mail-mcp
+# icloud-mcp
 
 To install dependencies:
 

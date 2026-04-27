@@ -32,7 +32,7 @@ function createServer(): {
   const caldavProvider = new CalDavProvider(caldavUrl, email, password);
 
   const server = new McpServer({
-    name: "icloud-bridge",
+    name: "icloud-mcp",
     version: "2.0.0",
   });
 
