@@ -3,7 +3,9 @@ import { z } from "zod";
 import type { ImapProvider } from "../providers/imap.js";
 import type { SmtpProvider } from "../providers/smtp.js";
 import type { CalDavProvider } from "../providers/caldav.js";
-import type { CalendarEvent, MessageSummary } from "../types.js";
+import type { RemindersProvider } from "../providers/reminders.js";
+import type { ContactsProvider } from "../providers/contacts.js";
+import type { CalendarEvent, MessageSummary, Reminder } from "../types.js";
 import { resolveTimezone, formatInTimezone } from "../utils/timezone.js";
 import { sameEmail } from "../utils/identity.js";
 
@@ -21,16 +23,73 @@ function getTimezoneOffsetMs(dateStr: string, timezone: string): number {
   return localDate.getTime() - utcDate.getTime();
 }
 
+/**
+ * Pure function that composes the daily_brief response object. Extracted for
+ * testability and to enforce the R1 regression contract: v2 callers must see
+ * `date`, `displayTimezone`, `calendar.events[]`, `calendar.eventCount`,
+ * `calendar.nextEvent`, `mail.unreadCount`, `mail.flaggedCount`, and
+ * `mail.recentMessages` exactly as before. v3 adds the `reminders` section.
+ */
+export function composeDailyBrief(input: {
+  date: string;
+  displayTimezone: string;
+  events: Array<CalendarEvent & { startDisplay?: string; endDisplay?: string }>;
+  eventCount: number;
+  nextEvent: (CalendarEvent & { startDisplay?: string; endDisplay?: string }) | null;
+  calendarError?: string;
+  unreadCount: number;
+  flaggedCount: number;
+  recentMessages: MessageSummary[];
+  mailError?: string;
+  reminders: Reminder[];
+  overdueCount: number;
+  dueTodayCount: number;
+  reminderListCount: number;
+  reminderError?: string;
+}): Record<string, unknown> {
+  const displayedReminders = input.reminders.map((r) => ({
+    ...r,
+    dueDisplay: r.due ? formatInTimezone(r.due.utc, input.displayTimezone) : null,
+  }));
+
+  return {
+    date: input.date,
+    displayTimezone: input.displayTimezone,
+    calendar: {
+      events: input.events,
+      eventCount: input.eventCount,
+      nextEvent: input.nextEvent,
+      ...(input.calendarError ? { error: input.calendarError } : {}),
+    },
+    mail: {
+      unreadCount: input.unreadCount,
+      flaggedCount: input.flaggedCount,
+      recentMessages: input.recentMessages,
+      ...(input.mailError ? { error: input.mailError } : {}),
+    },
+    reminders: {
+      items: displayedReminders,
+      overdueCount: input.overdueCount,
+      dueTodayCount: input.dueTodayCount,
+      listCount: input.reminderListCount,
+      ...(input.reminderError ? { error: input.reminderError } : {}),
+    },
+  };
+}
+
 export function registerCrossTools(
   server: McpServer,
   imapProvider: ImapProvider,
   smtpProvider: SmtpProvider,
   caldavProvider: CalDavProvider,
+  remindersProvider: RemindersProvider,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _contactsProvider: ContactsProvider,
   email: string
 ) {
   server.tool(
     "daily_brief",
-    "Get a combined daily overview: all calendar events across all calendars + unread mail summary. One tool call, full morning context. Times displayed in your timezone.",
+    "Cross-service morning overview: today's calendar events + unread mail + overdue/due-today reminders. One tool call returns everything Claude needs to triage your day. v2 callers see all original fields preserved; v3 adds a `reminders` section. Times displayed in your timezone.",
     {
       date: z
         .string()
@@ -146,22 +205,70 @@ export function registerCrossTools(
         flaggedCount = mailResults[2].value.total;
       }
 
-      const brief: Record<string, unknown> = {
+      // Fetch reminders (v3 chief-of-staff): overdue + due-today across all lists
+      let dueReminders: Reminder[] = [];
+      let reminderListCount = 0;
+      let overdueCount = 0;
+      let dueTodayCount = 0;
+      let reminderError: string | undefined;
+
+      try {
+        const lists = await remindersProvider.listLists();
+        reminderListCount = lists.length;
+        const listResults = await Promise.allSettled(
+          lists.map((l) => remindersProvider.listReminders(l.url))
+        );
+
+        const allReminders: Reminder[] = [];
+        let failedLists = 0;
+        for (const r of listResults) {
+          if (r.status === "fulfilled") allReminders.push(...r.value);
+          else failedLists++;
+        }
+        if (failedLists > 0) {
+          reminderError = `${failedLists} reminder list(s) failed to fetch`;
+        }
+
+        const dayEndUtcMs = dayEndUtc.getTime();
+        const nowMs = now.getTime();
+
+        for (const r of allReminders) {
+          if (r.isCompleted) continue;
+          if (!r.due) continue; // Skip undated reminders for the "today" brief
+          const dueMs = new Date(r.due.utc).getTime();
+          if (dueMs < nowMs) overdueCount++;
+          else if (dueMs < dayEndUtcMs) dueTodayCount++;
+          else continue; // Future reminders not in scope for today's brief
+          dueReminders.push(r);
+        }
+
+        dueReminders.sort(
+          (a, b) =>
+            new Date(a.due!.utc).getTime() - new Date(b.due!.utc).getTime()
+        );
+        // Cap at 50 to keep the brief readable
+        dueReminders = dueReminders.slice(0, 50);
+      } catch (error) {
+        reminderError = `Reminders fetch failed: ${error instanceof Error ? error.message : String(error)}`;
+      }
+
+      const brief = composeDailyBrief({
         date: dateStr,
         displayTimezone: displayTz,
-        calendar: {
-          events: displayedEvents,
-          eventCount: allEvents.length,
-          nextEvent: nextEvent ?? null,
-          ...(calendarError ? { error: calendarError } : {}),
-        },
-        mail: {
-          unreadCount,
-          flaggedCount,
-          recentMessages,
-          ...(mailError ? { error: mailError } : {}),
-        },
-      };
+        events: displayedEvents,
+        eventCount: allEvents.length,
+        nextEvent: nextEvent ?? null,
+        calendarError,
+        unreadCount,
+        flaggedCount,
+        recentMessages,
+        mailError,
+        reminders: dueReminders,
+        overdueCount,
+        dueTodayCount,
+        reminderListCount,
+        reminderError,
+      });
 
       return {
         content: [

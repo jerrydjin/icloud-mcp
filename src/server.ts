@@ -1,30 +1,12 @@
 /*
- * iCloud MCP Server (v2)
+ * iCloud MCP Server (v3)
  *
- * Unified MCP server for iCloud Mail + Calendar.
- * Same app-specific password authenticates IMAP, SMTP, and CalDAV.
+ * Unified MCP server: iCloud Mail + Calendar + Reminders + Contacts.
+ * Same app-specific password authenticates IMAP, SMTP, CalDAV, CardDAV.
  *
- * Dependency graph:
- *
- * ┌─────────────┐
- * │  server.ts   │  MCP server setup, creates providers
- * │  (entry)     │  passes providers to tool registrations
- * └──────┬───────┘
- *        │ creates + passes
- *        ▼
- * ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
- * │ ImapProvider  │  │ SmtpProvider  │  │ CalDavProvider│
- * │ (imap.ts)    │  │ (smtp.ts)    │  │ (caldav.ts)  │
- * └──────────────┘  └──────────────┘  └──────────────┘
- *        ▲                 ▲                 ▲
- *        │ uses            │ uses            │ uses
- *        └────────┬────────┴────────┬────────┘
- *          ┌──────┴───────┐  ┌──────┴───────┐
- *          │  tools/*.ts  │  │  tools/*.ts  │
- *          │  read.ts     │  │  calendar.ts │
- *          │  write.ts    │  │  cross.ts    │
- *          │  manage.ts   │  └──────────────┘
- *          └──────────────┘
+ * v3 chief-of-staff identity: per-service tools stay for v2 surface (Mail,
+ * Calendar). New providers (Reminders, Contacts) are accessible only through
+ * cross-service verbs like daily_brief / triage_my_day (per ENG-5).
  */
 
 // Bun loads .env automatically (no dotenv needed)
@@ -34,6 +16,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { ImapProvider } from "./providers/imap.js";
 import { SmtpProvider } from "./providers/smtp.js";
 import { CalDavProvider } from "./providers/caldav.js";
+import { RemindersProvider } from "./providers/reminders.js";
+import { ContactsProvider } from "./providers/contacts.js";
 import { registerReadTools } from "./tools/read.js";
 import { registerWriteTools } from "./tools/write.js";
 import { registerManageTools } from "./tools/manage.js";
@@ -48,6 +32,7 @@ const imapPort = Number(process.env.IMAP_PORT ?? "993");
 const smtpHost = process.env.SMTP_HOST ?? "smtp.mail.me.com";
 const smtpPort = Number(process.env.SMTP_PORT ?? "587");
 const caldavUrl = process.env.CALDAV_URL ?? "https://caldav.icloud.com";
+const carddavUrl = process.env.CARDDAV_URL ?? "https://contacts.icloud.com";
 
 if (!email || !password) {
   console.error(
@@ -60,11 +45,13 @@ if (!email || !password) {
 const imapProvider = new ImapProvider(imapHost, imapPort, email, password);
 const smtpProvider = new SmtpProvider(smtpHost, smtpPort, email, password);
 const caldavProvider = new CalDavProvider(caldavUrl, email, password);
+const remindersProvider = new RemindersProvider(caldavUrl, email, password);
+const contactsProvider = new ContactsProvider(carddavUrl, email, password);
 
 // Create MCP server
 const server = new McpServer({
   name: "icloud-mcp",
-  version: "2.0.0",
+  version: "3.0.0-dev",
 });
 
 // Register all tools
@@ -72,13 +59,23 @@ registerReadTools(server, imapProvider, email);
 registerWriteTools(server, imapProvider, smtpProvider);
 registerManageTools(server, imapProvider);
 registerCalendarTools(server, caldavProvider);
-registerCrossTools(server, imapProvider, smtpProvider, caldavProvider, email);
+registerCrossTools(
+  server,
+  imapProvider,
+  smtpProvider,
+  caldavProvider,
+  remindersProvider,
+  contactsProvider,
+  email
+);
 
 // Graceful shutdown
 async function shutdown() {
   await imapProvider.disconnect();
   await smtpProvider.disconnect();
   await caldavProvider.disconnect();
+  await remindersProvider.disconnect();
+  await contactsProvider.disconnect();
   process.exit(0);
 }
 

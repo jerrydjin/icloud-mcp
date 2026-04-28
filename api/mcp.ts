@@ -4,6 +4,8 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { ImapProvider } from "../src/providers/imap.js";
 import { SmtpProvider } from "../src/providers/smtp.js";
 import { CalDavProvider } from "../src/providers/caldav.js";
+import { RemindersProvider } from "../src/providers/reminders.js";
+import { ContactsProvider } from "../src/providers/contacts.js";
 import { registerReadTools } from "../src/tools/read.js";
 import { registerWriteTools } from "../src/tools/write.js";
 import { registerManageTools } from "../src/tools/manage.js";
@@ -14,6 +16,8 @@ function createServer(): {
   server: McpServer;
   imapProvider: ImapProvider;
   caldavProvider: CalDavProvider;
+  remindersProvider: RemindersProvider;
+  contactsProvider: ContactsProvider;
 } {
   const email = process.env.ICLOUD_EMAIL;
   const password = process.env.ICLOUD_APP_PASSWORD;
@@ -22,6 +26,7 @@ function createServer(): {
   const smtpHost = process.env.SMTP_HOST ?? "smtp.mail.me.com";
   const smtpPort = Number(process.env.SMTP_PORT ?? "587");
   const caldavUrl = process.env.CALDAV_URL ?? "https://caldav.icloud.com";
+  const carddavUrl = process.env.CARDDAV_URL ?? "https://contacts.icloud.com";
 
   if (!email || !password) {
     throw new Error("Missing ICLOUD_EMAIL or ICLOUD_APP_PASSWORD");
@@ -30,19 +35,29 @@ function createServer(): {
   const imapProvider = new ImapProvider(imapHost, imapPort, email, password);
   const smtpProvider = new SmtpProvider(smtpHost, smtpPort, email, password);
   const caldavProvider = new CalDavProvider(caldavUrl, email, password);
+  const remindersProvider = new RemindersProvider(caldavUrl, email, password);
+  const contactsProvider = new ContactsProvider(carddavUrl, email, password);
 
   const server = new McpServer({
     name: "icloud-mcp",
-    version: "2.0.0",
+    version: "3.0.0-dev",
   });
 
   registerReadTools(server, imapProvider, email);
   registerWriteTools(server, imapProvider, smtpProvider);
   registerManageTools(server, imapProvider);
   registerCalendarTools(server, caldavProvider);
-  registerCrossTools(server, imapProvider, smtpProvider, caldavProvider, email);
+  registerCrossTools(
+    server,
+    imapProvider,
+    smtpProvider,
+    caldavProvider,
+    remindersProvider,
+    contactsProvider,
+    email
+  );
 
-  return { server, imapProvider, caldavProvider };
+  return { server, imapProvider, caldavProvider, remindersProvider, contactsProvider };
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -62,7 +77,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   if (req.method === "POST") {
-    const { server, imapProvider, caldavProvider } = createServer();
+    const {
+      server,
+      imapProvider,
+      caldavProvider,
+      remindersProvider,
+      contactsProvider,
+    } = createServer();
 
     try {
       const transport = new StreamableHTTPServerTransport({
@@ -83,6 +104,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } finally {
       await imapProvider.disconnect();
       await caldavProvider.disconnect();
+      await remindersProvider.disconnect();
+      await contactsProvider.disconnect();
     }
   } else if (req.method === "GET" || req.method === "DELETE") {
     res.status(405).json({
