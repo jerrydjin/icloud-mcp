@@ -122,3 +122,55 @@ export interface CreateEventInput {
   calendar?: string; // display name or URL, default: first VEVENT calendar
   recurrence?: RecurrenceInput;
 }
+
+// --- Reminders types (v3) ---
+//
+// Reminders are CalDAV VTODO objects. iCloud exposes them through the same CalDAV
+// endpoint as calendar events, but on calendars whose `components` array contains
+// "VTODO" (or includes both "VEVENT" and "VTODO" — iCloud is inconsistent here).
+//
+// Apple's iOS 13+ Reminders introduced features (smart lists, nested subtasks,
+// location triggers, attachments) that are NOT exposed via CalDAV. v3 ships
+// VTODO-basic only; smart list / subtask access is deferred to v4 pending an
+// Apple Developer cert for EventKit (see TODOS.md and eventkit-cli/spike/).
+
+export interface ReminderListInfo {
+  displayName: string;
+  url: string;
+  color?: string;
+  ctag?: string;
+  description?: string;
+}
+
+export interface Reminder {
+  uid: string;
+  summary: string; // VTODO SUMMARY — the reminder text
+  description?: string;
+  due?: TimezoneAwareTime; // VTODO DUE — when it's due
+  isCompleted: boolean; // STATUS:COMPLETED present
+  completedAt?: string; // ISO 8601 UTC — VTODO COMPLETED, set when isCompleted=true
+  priority?: number; // 1-9 (1=highest, 9=lowest, 0/undefined=none)
+  percentComplete?: number; // 0-100
+  listUrl: string;
+  listName: string;
+  url: string; // CalDAV object URL for delete/update
+  etag?: string; // for conditional PUT
+}
+
+export interface CreateReminderInput {
+  summary: string;
+  description?: string;
+  due?: string; // ISO 8601 local time (no Z suffix when timezone provided)
+  timezone?: string; // IANA timezone — resolved via cascade if omitted
+  priority?: number; // 1-9
+  list?: string; // display name or URL, default: first VTODO list
+}
+
+export interface UpdateReminderInput {
+  summary?: string;
+  description?: string;
+  due?: string | null; // null clears the due date; undefined leaves it unchanged
+  timezone?: string;
+  priority?: number;
+  isCompleted?: boolean; // toggling true sets STATUS:COMPLETED + COMPLETED:<now-UTC>
+}
