@@ -12,6 +12,8 @@ import { registerManageTools } from "../src/tools/manage.js";
 import { registerCalendarTools } from "../src/tools/calendar.js";
 import { registerCrossTools } from "../src/tools/cross.js";
 import { registerFindVerb } from "../src/verbs/find.js";
+import { registerDeferVerb } from "../src/verbs/defer.js";
+import { registerDraftVerb } from "../src/verbs/draft.js";
 
 function createServer(): {
   server: McpServer;
@@ -57,14 +59,17 @@ function createServer(): {
     contactsProvider,
     email
   );
-  registerFindVerb(server, {
+  const verbCtx = {
     imap: imapProvider,
     smtp: smtpProvider,
     caldav: caldavProvider,
     reminders: remindersProvider,
     contacts: contactsProvider,
     email,
-  });
+  };
+  registerFindVerb(server, verbCtx);
+  registerDeferVerb(server, verbCtx);
+  registerDraftVerb(server, verbCtx);
 
   return { server, imapProvider, caldavProvider, remindersProvider, contactsProvider };
 }
