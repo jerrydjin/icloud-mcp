@@ -26,6 +26,7 @@ import { registerCrossTools } from "./tools/cross.js";
 import { registerFindVerb } from "./verbs/find.js";
 import { registerDeferVerb } from "./verbs/defer.js";
 import { registerDraftVerb } from "./verbs/draft.js";
+import { registerScheduleVerb } from "./verbs/schedule.js";
 
 // Validate required environment variables
 const email = process.env.ICLOUD_EMAIL;
@@ -84,6 +85,7 @@ const verbCtx = {
 registerFindVerb(server, verbCtx);
 registerDeferVerb(server, verbCtx);
 registerDraftVerb(server, verbCtx);
+registerScheduleVerb(server, verbCtx);
 
 // Graceful shutdown
 async function shutdown() {

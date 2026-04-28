@@ -14,6 +14,7 @@ import { registerCrossTools } from "../src/tools/cross.js";
 import { registerFindVerb } from "../src/verbs/find.js";
 import { registerDeferVerb } from "../src/verbs/defer.js";
 import { registerDraftVerb } from "../src/verbs/draft.js";
+import { registerScheduleVerb } from "../src/verbs/schedule.js";
 
 function createServer(): {
   server: McpServer;
@@ -70,6 +71,7 @@ function createServer(): {
   registerFindVerb(server, verbCtx);
   registerDeferVerb(server, verbCtx);
   registerDraftVerb(server, verbCtx);
+  registerScheduleVerb(server, verbCtx);
 
   return { server, imapProvider, caldavProvider, remindersProvider, contactsProvider };
 }
