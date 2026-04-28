@@ -328,6 +328,122 @@ export function registerCalendarTools(
   );
 
   server.tool(
+    "update_event",
+    "Modify an existing calendar event. Only fields you provide are changed; others are preserved. Supports rescheduling (start/end), retitling (summary), adding/replacing attendees, changing location/description, and replacing or clearing recurrence (pass recurrence:null to clear). Uses ETag conditional PUT — throws a clear error if the event was modified elsewhere since you last read it.",
+    {
+      uid: z.string().describe("Event UID"),
+      calendar: z
+        .string()
+        .optional()
+        .describe(
+          "Calendar display name or URL (default: primary calendar)"
+        ),
+      summary: z.string().optional().describe("New event title"),
+      start: z
+        .string()
+        .optional()
+        .describe(
+          "New start time (ISO 8601 local time, no Z suffix when using timezone)"
+        ),
+      end: z
+        .string()
+        .optional()
+        .describe(
+          "New end time (ISO 8601 local time, no Z suffix when using timezone)"
+        ),
+      timezone: z
+        .string()
+        .optional()
+        .describe(
+          "IANA timezone for the new start/end. Preserves the existing timezone if not provided."
+        ),
+      location: z
+        .string()
+        .nullable()
+        .optional()
+        .describe("New location. Pass null to clear, omit to preserve existing."),
+      description: z
+        .string()
+        .nullable()
+        .optional()
+        .describe("New description. Pass null to clear, omit to preserve existing."),
+      attendees: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "Replace the attendee list with these email addresses. Pass [] to clear, omit to preserve existing."
+        ),
+      isAllDay: z
+        .boolean()
+        .optional()
+        .describe("Change all-day flag. Omit to preserve existing."),
+      recurrence: RecurrenceSchema.nullable()
+        .optional()
+        .describe(
+          "Replace recurrence rule. Pass null to clear, omit to preserve existing."
+        ),
+    },
+    async ({
+      uid,
+      calendar,
+      summary,
+      start,
+      end,
+      timezone,
+      location,
+      description,
+      attendees,
+      isAllDay,
+      recurrence,
+    }) => {
+      try {
+        const calendarUrl = await caldavProvider.resolveCalendarUrl(calendar);
+        const event = await caldavProvider.updateEvent(calendarUrl, uid, {
+          summary,
+          start,
+          end,
+          timezone,
+          location,
+          description,
+          attendees,
+          isAllDay,
+          recurrence,
+        });
+
+        const displayTz = resolveTimezone(timezone ?? event.start.timezone);
+        const displayed = formatEventForDisplay(event, displayTz);
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                { uid: event.uid, success: true, event: displayed },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        const conflictHint = msg.includes("412")
+          ? " The event was modified by another client since you read it. Re-fetch and retry with the new ETag."
+          : "";
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Failed to update event: ${msg}${conflictHint}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.tool(
     "delete_event",
     "Delete a calendar event by UID. Fetches the event internally to resolve the CalDAV object URL.",
     {

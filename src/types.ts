@@ -123,6 +123,24 @@ export interface CreateEventInput {
   recurrence?: RecurrenceInput;
 }
 
+// UpdateEventInput — semantics:
+// - undefined: preserve existing value
+// - explicit value: replace
+// - null (where allowed): clear (remove the field)
+// Only the master event is updated for recurring events; individual occurrence
+// modification (RECURRENCE-ID) is NOT supported in v3.
+export interface UpdateEventInput {
+  summary?: string;
+  start?: string;
+  end?: string;
+  timezone?: string;
+  location?: string | null;
+  description?: string | null;
+  attendees?: string[]; // replaces entirely; pass [] to clear
+  isAllDay?: boolean;
+  recurrence?: RecurrenceInput | null; // null clears the rule
+}
+
 // --- Reminders types (v3) ---
 //
 // Reminders are CalDAV VTODO objects. iCloud exposes them through the same CalDAV

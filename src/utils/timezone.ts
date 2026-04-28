@@ -69,6 +69,19 @@ export function localToUtc(localISO: string, timezone: string): string {
 }
 
 /**
+ * Convert a UTC ISO string to a local time string (no Z suffix) in the given timezone.
+ * Inverse of localToUtc. Used by update_event to preserve original timezone display
+ * when the caller doesn't change start/end.
+ */
+export function utcToLocal(utcISO: string, timezone: string): string {
+  const icalTz = registerTimezone(timezone);
+  const utcTime = ICAL.Time.fromDateTimeString(utcISO.replace(/Z$/, ""));
+  utcTime.zone = ICAL.Timezone.utcTimezone;
+  const localTime = utcTime.convertToZone(icalTz);
+  return localTime.toString();
+}
+
+/**
  * Validate that a string is a valid IANA timezone identifier.
  */
 export function validateTimezone(tz: string): void {
