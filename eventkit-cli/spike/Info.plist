@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.jerrydjin.icloud-eventkit-spike</string>
+    <key>CFBundleName</key>
+    <string>icloud-eventkit-spike</string>
+    <key>CFBundleExecutable</key>
+    <string>icloud-eventkit-spike</string>
+    <key>CFBundleVersion</key>
+    <string>0.0.1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.0.1</string>
+    <key>NSRemindersFullAccessUsageDescription</key>
+    <string>icloud-mcp needs access to Reminders to triage and reschedule them.</string>
+    <key>NSRemindersUsageDescription</key>
+    <string>icloud-mcp needs access to Reminders to triage and reschedule them.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>icloud-mcp needs access to Calendar to schedule and update events.</string>
+</dict>
+</plist>

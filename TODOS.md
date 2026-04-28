@@ -9,11 +9,8 @@
 ## ~~v2: Provider interface abstraction for ecosystem bridge~~ DONE
 Shipped in v2.0.0. ServiceProvider interface in types.ts, implemented by ImapProvider, SmtpProvider, CalDavProvider.
 
-## v3: Tool namespacing
-**What:** Namespace MCP tools by service (e.g. `mail_list_messages`, `cal_list_events`) instead of flat names.
-**Why:** v2 ships 23 tools. When Contacts/Reminders push past 30, flat naming gets confusing for Claude and users. Namespacing makes tool discovery predictable.
-**Context:** Current flat naming works fine at 23 tools. Revisit when adding CardDAV (Contacts) or VTODO (Reminders) providers.
-**Depends on:** A 4th provider being planned.
+## ~~v3: Tool namespacing~~ HANDLED BY v3 VERB REFACTOR
+The v3 design (chief-of-staff identity, ENG-5 decision: verbs-only for new providers) makes flat tool naming a non-issue. Verb count stays low (~6); legacy v2 per-service tools stay as-is until v4 cleanup. Tool namespacing concern resolved without an explicit namespacing pass.
 
 ## v3: DST oracle / "what time is it really?" tool
 **What:** A standalone tool that answers "what time is it in X timezone right now?" and "when does DST change next in X?" without needing a calendar event context.
@@ -21,11 +18,32 @@ Shipped in v2.0.0. ServiceProvider interface in types.ts, implemented by ImapPro
 **Context:** The timezone utility module (src/utils/timezone.ts) already has resolveTimezone, formatInTimezone, and IANA validation. A DST oracle would layer on top: use Intl.DateTimeFormat to detect current offset, then probe future dates to find the next transition. Pure computation, no external API needed.
 **Depends on:** v2.1 timezone intelligence shipped.
 
-## v3: update_event with ETag conditional PUT
-**What:** Add an `update_event` tool that modifies existing calendar events using CalDAV conditional PUT with If-Match ETag.
-**Why:** Users want to reschedule, add attendees, change descriptions on existing events. Currently they must delete + recreate.
-**Context:** CalendarEvent already stores `etag` (added in v2). The ETag enables optimistic concurrency: PUT with If-Match header, server rejects if another client modified the event. Requires building a VCALENDAR diff (merge existing fields with updates) rather than full replacement. ical.js handles both parsing and generation.
-**Depends on:** v2 Calendar tools shipped and stable.
+## ~~v3: update_event with ETag conditional PUT~~ BUNDLED INTO v3 M1
+Per ENG-6 decision: the same conditional-PUT machinery is needed for VTODO writes (completeReminder, updateReminder), so update_event for VEVENT lands in M1 alongside the new providers. Single implementation of the etag/If-Match pattern shared across VTODO and VEVENT updates.
+
+## v4: Full identity dedup (multi-email, fuzzy name)
+**What:** Extend `src/utils/identity.ts` (created in v3 with `canonicalEmail()`) to handle multi-email contacts (work + personal), fuzzy name matching (Jane Smith vs J. Smith), and phone-number fallback when no email exists.
+**Why:** v3 minimal email-based dedup (ENG-15) handles 80% of cases; the remaining 20% (multi-email contacts, attendees-by-name) makes find/triage feel half-broken. Without this, a `find` for "Jane" returns multiple records for the same person.
+**Context:** v3.0 ships canonicalEmail() promoted from cross.ts:238. v4 adds: multi-email dedupe via Contacts cross-reference, fuzzy name matching with edit-distance, contact-graph resolution. Decision deliberately deferred from v3 to keep ship scope tight; revisit when a verb breaks because of it.
+**Depends on:** v3.0 ships with minimal dedup utility in place.
+
+## v4: macOS Keychain credential storage
+**What:** Replace env-var-based auth with macOS Keychain on Mac, falling back to env vars on Linux/Vercel/missing-Keychain.
+**Why:** Env vars in shell config files are crude. Keychain is the macOS-native credential store; iteratio/icloud-mcp uses this pattern. Smoother first-run UX, no plaintext passwords in dotfiles.
+**Context:** v3 keeps env-var pattern (matches v2). v4 makes Keychain the default on Mac with env-var fallback. Need a credential resolution priority: Keychain → env var → setup prompt. iteratio/icloud-mcp is the reference implementation.
+**Depends on:** v3 ships with env-var pattern stable.
+
+## v4: EventKit-based Reminders depth (smart lists, subtasks, location triggers)
+**What:** Add Mac-local Reminders depth via EventKit, accessible via the verb layer's capability negotiation envelope (already designed in v3 ENG-4).
+**Why:** Apple removed CalDAV-first design from Reminders in iOS 13+. Smart lists, nested subtasks, location triggers, and attachments only round-trip cleanly via EventKit on a Mac. v3 ships VTODO-basic via CalDAV (no depth); v4 brings back the full depth.
+**Context:** The 30-min TCC spike on 2026-04-28 (artifacts at eventkit-cli/spike/) proved that ad-hoc-signed binaries cannot get Reminders TCC permission on macOS 26.4 — silently denied even with embedded Info.plist + entitlements + .app wrapping. Path forward requires a paid Apple Developer Program membership ($99/year) for Developer ID signing + notarytool notarization. That cost is the gating decision for v4.
+**Depends on:** Real users on v3 wanting depth; willingness to pay $99/year; OR Apple changing TCC policy for ad-hoc binaries (unlikely).
+
+## v4+: Notes content via AppleScript / Notes scripting bridge
+**What:** Read Apple Notes content via AppleScript (or the Notes app's scripting interface) on Mac, exposed as a NotesProvider.
+**Why:** Notes is the most-asked-about Apple service that v3 explicitly punts (P4 scope ceiling). Has no remote API; only Mac-local access works. Closes the highest-volume gap from "all Apple products" framing.
+**Context:** RafalWilinski/mcp-apple-notes does RAG over Apple Notes — useful prior art. icloud-mcp would shell out to AppleScript via Bun.$ (matching the EventKit shell-out pattern originally planned in v3). Brittle (AppleScript bridge can break on macOS updates); slow (AppleScript IPC is heavyweight). NOTE: AppleScript automation likely hits the same TCC issue as EventKit — see the v3 spike at eventkit-cli/spike/. Will need a developer cert for any real Mac-local Apple service access. Test cheaply via a 30-min AppleScript spike before committing.
+**Depends on:** v4 EventKit work proven (validates the dev cert + signed app pattern).
 
 ## v2: Semantic search via embedding index
 **What:** Build a local embedding index of email content so users can search by meaning ("emails about money I owe") rather than exact keywords ("invoice").

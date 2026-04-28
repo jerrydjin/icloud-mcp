@@ -1,0 +1,19 @@
+{
+  "spike": "icloud-eventkit-tcc",
+  "date": "2026-04-28",
+  "macosVersion": "26.4 (build 25E5233c)",
+  "swiftVersion": "6.3.1",
+  "platform": "arm64-apple-macosx26.0",
+  "configurationsTested": [
+    "ad-hoc-signed CLI binary, no Info.plist",
+    "ad-hoc-signed CLI binary, Info.plist embedded via -sectcreate",
+    "ad-hoc-signed .app bundle with Info.plist + ad-hoc deep codesign",
+    ".app bundle with explicit reminders + calendars entitlements via codesign --entitlements",
+    "all of the above, detached from Conductor parent via nohup"
+  ],
+  "result": "tcc_denied",
+  "promptShown": false,
+  "errorReturned": null,
+  "conclusion": "ad-hoc-signed binaries (CLI or .app) silently denied Reminders TCC access on macOS 26.4. Developer ID signing or App Store sandboxing required.",
+  "implications": "M2 of icloud-mcp v3 design is NOT feasible as currently specified. Need to choose: (1) get developer cert + notarize, (2) rewrite M2 as a different distribution shape, (3) drop EventKit from v3 and accept VTODO-basic only."
+}

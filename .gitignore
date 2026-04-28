@@ -32,3 +32,9 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Finder (MacOS) folder config
 .DS_Store
+
+# Compiled Swift artifacts (eventkit-cli spike binaries — keep sources, drop binaries)
+eventkit-cli/spike/icloud-eventkit-spike
+eventkit-cli/spike/icloud-eventkit-spike.app/
+eventkit-cli/spike/*.dSYM/
+eventkit-cli/.build/

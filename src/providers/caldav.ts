@@ -1,7 +1,5 @@
-import { createDAVClient, type DAVCalendar } from "tsdav";
 import ICAL from "ical.js";
 import type {
-  ServiceProvider,
   CalendarInfo,
   CalendarEvent,
   CreateEventInput,
@@ -15,58 +13,28 @@ import {
   localToUtc,
 } from "../utils/timezone.js";
 import { buildRRule, weekdayOfStart } from "../utils/rrule.js";
-
-// CalDAV is stateless HTTP with Basic auth per request.
-// No persistent connection, no keepalive, no NOOP equivalent.
-// ensureConnected() guards one-time PROPFIND discovery only.
-
-type DAVClientInstance = Awaited<ReturnType<typeof createDAVClient>>;
+import { CalDavTransport, type DAVCalendar } from "./caldav-transport.js";
+import { requireOkAndEtag, iCalErrorExcerpt } from "./icloud-quirks.js";
 
 function isUtcTimezone(tz: string): boolean {
   const t = tz.toLowerCase();
   return t === "utc" || t === "etc/utc" || t === "gmt" || t === "etc/gmt";
 }
 
-export class CalDavProvider implements ServiceProvider {
-  private client: DAVClientInstance | null = null;
-  private connected = false;
+export class CalDavProvider extends CalDavTransport {
   private calendarsCache: DAVCalendar[] | null = null;
 
-  constructor(
-    private serverUrl: string,
-    private email: string,
-    private password: string
-  ) {}
-
-  async connect(): Promise<void> {
-    if (this.connected) return;
-    this.client = await createDAVClient({
-      serverUrl: this.serverUrl,
-      credentials: {
-        username: this.email,
-        password: this.password,
-      },
-      authMethod: "Basic",
-      defaultAccountType: "caldav",
-    });
-    this.connected = true;
+  constructor(serverUrl: string, email: string, password: string) {
+    super(serverUrl, email, password, "caldav");
   }
 
-  async disconnect(): Promise<void> {
-    this.client = null;
-    this.connected = false;
+  protected override onDisconnect(): void {
     this.calendarsCache = null;
-  }
-
-  async ensureConnected(): Promise<void> {
-    if (!this.connected) {
-      await this.connect();
-    }
   }
 
   async listCalendars(): Promise<CalendarInfo[]> {
     await this.ensureConnected();
-    const rawCalendars = await this.client!.fetchCalendars();
+    const rawCalendars = await this.dav.fetchCalendars();
 
     // Filter to VEVENT calendars only (excludes Reminders/VTODO).
     // If components is undefined, include the calendar (assume VEVENT).
@@ -94,7 +62,7 @@ export class CalDavProvider implements ServiceProvider {
 
     const calendarName = await this.getCalendarName(calendarUrl);
 
-    const objects = await this.client!.fetchCalendarObjects({
+    const objects = await this.dav.fetchCalendarObjects({
       calendar: { url: calendarUrl } as DAVCalendar,
       timeRange: {
         start: start.toISOString(),
@@ -147,7 +115,7 @@ export class CalDavProvider implements ServiceProvider {
 
     const calendarName = await this.getCalendarName(calendarUrl);
 
-    const objects = await this.client!.fetchCalendarObjects({
+    const objects = await this.dav.fetchCalendarObjects({
       calendar: { url: calendarUrl } as DAVCalendar,
     });
 
@@ -298,37 +266,16 @@ export class CalDavProvider implements ServiceProvider {
     comp.addSubcomponent(vevent);
     const iCalString = comp.toString();
 
-    const response = await this.client!.createCalendarObject({
+    const response = await this.dav.createCalendarObject({
       calendar: { url: calendarUrl } as DAVCalendar,
       filename: `${uid}.ics`,
       iCalString,
     });
 
-    // tsdav returns the raw fetch Response without throwing on 4xx/5xx.
-    // A successful CalDAV PUT returns 2xx *and* an ETag header. Absence of
-    // either means iCloud rejected the object (often a malformed RRULE,
-    // e.g. WEEKLY without BYDAY) — surface it instead of fake-succeeding.
-    const etag = response.headers.get("etag") ?? undefined;
-    if (!response.ok || !etag) {
-      let body = "";
-      try {
-        body = await response.text();
-      } catch {
-        /* ignore */
-      }
-      // Include a VEVENT excerpt so failures are diagnosable without server logs.
-      const veventExcerpt = iCalString
-        .split(/\r?\n/)
-        .filter((l) =>
-          /^(UID|SUMMARY|DTSTART|DTEND|RRULE|SEQUENCE|TZID)/i.test(l)
-        )
-        .join(" | ");
-      throw new Error(
-        `CalDAV PUT rejected (status ${response.status} ${response.statusText}${etag ? "" : ", no ETag"}). ` +
-          `Response: ${body.slice(0, 500) || "<empty>"}. ` +
-          `VEVENT: ${veventExcerpt}`
-      );
-    }
+    // iCloud quirk: tsdav returns a raw fetch Response on 4xx/5xx. We need 2xx + ETag
+    // to confirm the write actually landed. requireOkAndEtag throws with a payload
+    // excerpt when iCloud rejects (e.g., malformed RRULE).
+    const etag = await requireOkAndEtag(response, iCalErrorExcerpt(iCalString));
     const resultUrl = response.url || `${calendarUrl}${uid}.ics`;
 
     // Build TimezoneAwareTime for the return value
@@ -373,7 +320,7 @@ export class CalDavProvider implements ServiceProvider {
       throw new Error(`Event with UID ${uid} not found`);
     }
 
-    await this.client!.deleteCalendarObject({
+    await this.dav.deleteCalendarObject({
       calendarObject: {
         url: event.url,
         etag: event.etag,
