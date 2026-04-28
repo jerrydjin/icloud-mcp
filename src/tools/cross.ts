@@ -5,6 +5,7 @@ import type { SmtpProvider } from "../providers/smtp.js";
 import type { CalDavProvider } from "../providers/caldav.js";
 import type { CalendarEvent, MessageSummary } from "../types.js";
 import { resolveTimezone, formatInTimezone } from "../utils/timezone.js";
+import { sameEmail } from "../utils/identity.js";
 
 /**
  * Get the UTC offset in milliseconds for a given date and timezone.
@@ -234,9 +235,7 @@ export function registerCrossTools(
           .filter(Boolean);
 
         if (excludeSelf) {
-          recipients = recipients.filter(
-            (addr) => addr.toLowerCase() !== email.toLowerCase()
-          );
+          recipients = recipients.filter((addr) => !sameEmail(addr, email));
         }
 
         if (recipients.length === 0) {
