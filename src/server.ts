@@ -23,6 +23,7 @@ import { registerWriteTools } from "./tools/write.js";
 import { registerManageTools } from "./tools/manage.js";
 import { registerCalendarTools } from "./tools/calendar.js";
 import { registerCrossTools } from "./tools/cross.js";
+import { registerFindVerb } from "./verbs/find.js";
 
 // Validate required environment variables
 const email = process.env.ICLOUD_EMAIL;
@@ -68,6 +69,17 @@ registerCrossTools(
   contactsProvider,
   email
 );
+
+// v3 verbs (chief-of-staff layer per ENG-7)
+const verbCtx = {
+  imap: imapProvider,
+  smtp: smtpProvider,
+  caldav: caldavProvider,
+  reminders: remindersProvider,
+  contacts: contactsProvider,
+  email,
+};
+registerFindVerb(server, verbCtx);
 
 // Graceful shutdown
 async function shutdown() {
