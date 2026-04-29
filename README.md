@@ -41,7 +41,7 @@ Run the MCP server (stdio transport, for Claude Desktop):
 bun run start
 ```
 
-Or via Vercel for remote access (the `api/mcp.ts` entry point uses StreamableHTTP transport with bearer-token auth — see [Vercel docs](https://vercel.com/docs)).
+Or via Vercel for remote access. Production deployment lives at **`https://icloud.jerryjin.dev/api/mcp`** (StreamableHTTP transport with bearer-token auth — set `AUTH_TOKEN` in your Vercel environment variables; see `api/mcp.ts`).
 
 ## Connecting to Claude Desktop
 

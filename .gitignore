@@ -38,3 +38,4 @@ eventkit-cli/spike/icloud-eventkit-spike
 eventkit-cli/spike/icloud-eventkit-spike.app/
 eventkit-cli/spike/*.dSYM/
 eventkit-cli/.build/
+.vercel
