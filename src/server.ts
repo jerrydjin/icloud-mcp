@@ -55,7 +55,7 @@ const contactsProvider = new ContactsProvider(carddavUrl, email, password);
 // Create MCP server
 const server = new McpServer({
   name: "icloud-mcp",
-  version: "3.0.0-dev",
+  version: "3.0.0",
 });
 
 // Register all tools

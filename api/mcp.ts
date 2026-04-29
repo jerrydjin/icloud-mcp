@@ -44,7 +44,7 @@ function createServer(): {
 
   const server = new McpServer({
     name: "icloud-mcp",
-    version: "3.0.0-dev",
+    version: "3.0.0",
   });
 
   registerReadTools(server, imapProvider, email);
