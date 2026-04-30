@@ -54,7 +54,7 @@ export function registerTimezone(timezone: string): ICAL.Timezone {
   const vtimezoneStr = buildVTimezone(timezone);
   const comp = ICAL.Component.fromString(vtimezoneStr);
   const icalTz = new ICAL.Timezone({ component: comp });
-  ICAL.TimezoneService.register(timezone, icalTz);
+  ICAL.TimezoneService.register(icalTz, timezone);
   return icalTz;
 }
 
