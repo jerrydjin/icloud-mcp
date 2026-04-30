@@ -5,6 +5,7 @@ import type { SmtpProvider } from "../providers/smtp.js";
 import type { CalDavProvider } from "../providers/caldav.js";
 import type { RemindersProvider } from "../providers/reminders.js";
 import type { ContactsProvider } from "../providers/contacts.js";
+import type { IdentityResolver } from "../providers/identity-cache.js";
 import type { CalendarEvent, MessageSummary, Reminder } from "../types.js";
 import { resolveTimezone, formatInTimezone } from "../utils/timezone.js";
 import { sameEmail } from "../utils/identity.js";
@@ -85,6 +86,7 @@ export function registerCrossTools(
   remindersProvider: RemindersProvider,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _contactsProvider: ContactsProvider,
+  identityResolver: IdentityResolver,
   email: string
 ) {
   server.tool(
@@ -275,6 +277,28 @@ export function registerCrossTools(
           {
             type: "text" as const,
             text: JSON.stringify(brief, null, 2),
+          },
+        ],
+      };
+    }
+  );
+
+  // v4 M4.1 admin tool: invalidate the identity resolver's per-request Contacts
+  // cache. Useful during stdio dogfooding when you've just edited a Contact and
+  // want the next verb call to pick up the change without restarting the server.
+  // On Vercel the cache is per-request anyway, so this is a no-op there in
+  // practice but stays available for parity.
+  server.tool(
+    "identity_cache_flush",
+    "Drop the identity resolver's Contacts cache. The next verb call will refetch Contacts. Use after editing a contact in the iCloud Contacts app if a long-lived MCP session is showing stale name/email resolutions.",
+    {},
+    async () => {
+      identityResolver.flush();
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ flushed: true }, null, 2),
           },
         ],
       };

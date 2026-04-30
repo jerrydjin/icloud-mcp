@@ -18,6 +18,7 @@ import { SmtpProvider } from "./providers/smtp.js";
 import { CalDavProvider } from "./providers/caldav.js";
 import { RemindersProvider } from "./providers/reminders.js";
 import { ContactsProvider } from "./providers/contacts.js";
+import { IdentityResolver } from "./providers/identity-cache.js";
 import { registerReadTools } from "./tools/read.js";
 import { registerWriteTools } from "./tools/write.js";
 import { registerManageTools } from "./tools/manage.js";
@@ -55,8 +56,11 @@ const contactsProvider = new ContactsProvider(carddavUrl, email, password);
 // Create MCP server
 const server = new McpServer({
   name: "icloud-mcp",
-  version: "3.0.0",
+  version: "4.1.0",
 });
+
+// v4 M4.1: identity resolver, request-scoped on Vercel and process-scoped on stdio
+const identityResolver = new IdentityResolver(contactsProvider);
 
 // Register all tools
 registerReadTools(server, imapProvider, email);
@@ -70,6 +74,7 @@ registerCrossTools(
   caldavProvider,
   remindersProvider,
   contactsProvider,
+  identityResolver,
   email
 );
 
@@ -80,6 +85,7 @@ const verbCtx = {
   caldav: caldavProvider,
   reminders: remindersProvider,
   contacts: contactsProvider,
+  identityResolver,
   email,
 };
 registerFindVerb(server, verbCtx);

@@ -6,6 +6,7 @@ import { SmtpProvider } from "../src/providers/smtp.js";
 import { CalDavProvider } from "../src/providers/caldav.js";
 import { RemindersProvider } from "../src/providers/reminders.js";
 import { ContactsProvider } from "../src/providers/contacts.js";
+import { IdentityResolver } from "../src/providers/identity-cache.js";
 import { registerReadTools } from "../src/tools/read.js";
 import { registerWriteTools } from "../src/tools/write.js";
 import { registerManageTools } from "../src/tools/manage.js";
@@ -44,8 +45,11 @@ function createServer(): {
 
   const server = new McpServer({
     name: "icloud-mcp",
-    version: "3.0.0",
+    version: "4.1.0",
   });
+
+  // v4 M4.1: identity resolver, scoped to this request (Vercel = stateless per call)
+  const identityResolver = new IdentityResolver(contactsProvider);
 
   registerReadTools(server, imapProvider, email);
   registerWriteTools(server, imapProvider, smtpProvider);
@@ -58,6 +62,7 @@ function createServer(): {
     caldavProvider,
     remindersProvider,
     contactsProvider,
+    identityResolver,
     email
   );
   const verbCtx = {
@@ -66,6 +71,7 @@ function createServer(): {
     caldav: caldavProvider,
     reminders: remindersProvider,
     contacts: contactsProvider,
+    identityResolver,
     email,
   };
   registerFindVerb(server, verbCtx);

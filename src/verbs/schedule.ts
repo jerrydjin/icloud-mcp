@@ -1,8 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { CalendarEvent } from "../types.js";
-import type { Contact } from "../providers/contacts.js";
-import { canonicalEmail, sameEmail } from "../utils/identity.js";
+import { sameEmail } from "../utils/identity.js";
 import {
   type VerbContext,
   type VerbResult,
@@ -282,7 +281,7 @@ export function addMinutesToLocal(localISO: string, minutes: number): string {
   return `${newY}-${newMo}-${newD}T${newH}:${newMi}${seconds}`;
 }
 
-// ── Attendee resolution (similar to draft, but emits ATTENDEE-shaped strings) ──
+// ── Attendee resolution (M4.1: routes through ctx.identityResolver) ──
 
 async function resolveAttendees(
   inputs: string[],
@@ -296,58 +295,47 @@ async function resolveAttendees(
     const entry = raw.trim();
     if (!entry) continue;
 
-    if (looksLikeEmail(entry)) {
-      // Don't add the user themselves as an attendee
-      if (sameEmail(entry, ctx.email)) continue;
-      out.push(entry);
-      continue;
-    }
-
-    let matches: Contact[] = [];
+    let result;
     try {
-      matches = await ctx.contacts.searchContacts(entry);
+      result = await ctx.identityResolver.resolveIdentity(entry);
     } catch (e) {
       errors.push({
         source: "contacts",
-        message: `Contacts lookup for '${entry}' failed: ${e instanceof Error ? e.message : String(e)}`,
+        message: `Identity resolution for '${entry}' failed: ${e instanceof Error ? e.message : String(e)}`,
       });
       unresolved.push({ input: entry, reason: "contacts_lookup_failed" });
       continue;
     }
 
-    if (matches.length === 0) {
-      unresolved.push({ input: entry, reason: "no_match" });
+    if (result.unresolvedReason) {
+      unresolved.push({ input: entry, reason: result.unresolvedReason });
       continue;
     }
 
-    if (matches.length > 1) {
-      const candidates = matches.slice(0, 5).map((c) => {
-        const primary = c.emails.find((e) => e.preferred) ?? c.emails[0];
-        return `${c.fullName}${primary ? ` <${primary.address}>` : ""}`;
-      });
+    if (result.ambiguous) {
+      const candidates = result.ambiguous
+        .slice(0, 5)
+        .map((id) =>
+          id.canonical
+            ? `${id.displayName} <${id.canonical}>`
+            : id.displayName
+        );
       unresolved.push({ input: entry, reason: "ambiguous", candidates });
       continue;
     }
 
-    const contact = matches[0]!;
-    const primary = contact.emails.find((e) => e.preferred) ?? contact.emails[0];
-    if (!primary) {
+    const id = result.identity!;
+    if (!id.canonical) {
       unresolved.push({
         input: entry,
         reason: "contact_has_no_email",
-        candidates: [contact.fullName],
+        candidates: [id.displayName || entry],
       });
       continue;
     }
-    const canonical = canonicalEmail(primary.address) || primary.address;
-    if (sameEmail(canonical, ctx.email)) continue; // skip self
-    out.push(canonical);
+    if (sameEmail(id.canonical, ctx.email)) continue; // skip self
+    out.push(id.canonical);
   }
 
   return out;
-}
-
-function looksLikeEmail(s: string): boolean {
-  const at = s.indexOf("@");
-  return at > 0 && at < s.length - 1 && !/\s/.test(s);
 }

@@ -3,6 +3,7 @@ import type { SmtpProvider } from "../providers/smtp.js";
 import type { CalDavProvider } from "../providers/caldav.js";
 import type { RemindersProvider } from "../providers/reminders.js";
 import type { ContactsProvider } from "../providers/contacts.js";
+import type { IdentityResolver } from "../providers/identity-cache.js";
 
 // ── VerbContext: providers + identity, passed to every verb handler ──
 
@@ -12,6 +13,7 @@ export interface VerbContext {
   caldav: CalDavProvider;
   reminders: RemindersProvider;
   contacts: ContactsProvider;
+  identityResolver: IdentityResolver;
   email: string; // user's own iCloud address — for self-filtering (sameEmail)
 }
 
