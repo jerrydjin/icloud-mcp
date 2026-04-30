@@ -20,6 +20,21 @@ Mail: `list_folders`, `list_messages`, `read_message`, `search_messages`, `send_
 
 Calendar: `list_calendars`, `list_events`, `get_event`, `create_event`, `update_event` (v3, new), `delete_event`.
 
+**v4 admin tools**
+
+- `identity_cache_flush` — Drop the per-request Contacts cache used by the identity resolver. After editing a Contact in the iCloud Contacts app, call this so the next verb sees the change without restarting the server.
+
+## What v4.1 changed (the identity layer)
+
+`draft` and `schedule` now route name resolution through a single identity layer that handles fuzzy matching, multi-email collapse, and shared-phone collapse:
+
+- **Fuzzy name matching.** Drafting to `Andersn` resolves to `Anderson` (1-character typos on names ≥7 chars match at the 0.85 similarity threshold). Pure substring matches still take precedence; fuzzy is a fallback when nothing else matched.
+- **Multi-email collapse.** A Contact with both `jane.work@…` and `jane.home@…` resolves to one identity with the preferred email as canonical. No more "ambiguous" prompt for the same person.
+- **Shared-phone collapse.** Two Contact records that share a phone number collapse to one identity (the user usually didn't mean to create both).
+- **Per-request cache lifecycle.** Contacts are fetched once at the start of a request and reused for every identity lookup within that request. On Vercel the cache lives for one HTTP call; on stdio it lives for the long-running process.
+
+The current threshold (0.85) and the per-request cache are both first-shot guesses pending dogfooding measurement. See `CHANGELOG.md` for the M4.1 ship-gate items still owed.
+
 ## Setup
 
 Install dependencies:
@@ -87,12 +102,13 @@ src/
     caldav.ts              Calendar (VEVENT)
     reminders.ts           Reminders (VTODO via CalDAV)
     contacts.ts            Contacts (CardDAV with hand-rolled vCard parser)
+    identity-cache.ts      v4 IdentityResolver — request-scoped Contacts index
   tools/             v2 per-service MCP tool registrations
   verbs/             v3 cross-service verb registrations + shared envelope
   utils/
     timezone.ts            Resolve / register / convert iCloud-friendly timezones
     rrule.ts               Recurrence rule construction
-    identity.ts            canonicalEmail + sameEmail (minimal v3 dedup)
+    identity.ts            Email/phone canonicalization + fuzzy name helpers
 docs/
   ICLOUD-QUIRKS.md         Canonical record of iCloud's CalDAV/CardDAV deviations
 eventkit-cli/spike/        TCC feasibility test that proved EventKit needs a paid

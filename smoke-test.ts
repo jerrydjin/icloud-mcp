@@ -23,6 +23,7 @@ import { SmtpProvider } from "./src/providers/smtp.js";
 import { CalDavProvider } from "./src/providers/caldav.js";
 import { RemindersProvider } from "./src/providers/reminders.js";
 import { ContactsProvider } from "./src/providers/contacts.js";
+import { IdentityResolver } from "./src/providers/identity-cache.js";
 
 const email = process.env.ICLOUD_EMAIL;
 const password = process.env.ICLOUD_APP_PASSWORD;
@@ -233,6 +234,57 @@ try {
   fail("D. v3 Contacts", err);
 } finally {
   await contacts.disconnect();
+}
+
+// ── E. v4 IdentityResolver (M4.1) — measure cold-start cost on real Contacts ──
+
+console.log("\n[E] v4 IdentityResolver (M4.1) — cold-start cost on real Contacts");
+const contactsForIdentity = new ContactsProvider(carddavUrl, email, password);
+try {
+  const resolver = new IdentityResolver(contactsForIdentity);
+
+  // First call hits Contacts cold — this is the latency you'll feel on Vercel.
+  const t0 = Date.now();
+  const stranger = await resolver.resolveIdentity("nobody@nowhere.invalid");
+  const coldMs = Date.now() - t0;
+  if (!stranger.identity || stranger.identity.contactUid !== null) {
+    throw new Error(
+      "Unknown email should return a Contact-less identity, not match a real Contact"
+    );
+  }
+  pass(`IdentityResolver cold-start (full Contacts walk): ${coldMs}ms`);
+  if (coldMs > 5000) {
+    console.log(
+      `     ⚠️  Cold-start >5sec — revisit per-request cache decision (design doc OQ #4).`
+    );
+  }
+
+  // Second call is a cache hit — should be near-instant.
+  const t1 = Date.now();
+  await resolver.resolveIdentity("alsonobody@nowhere.invalid");
+  const warmMs = Date.now() - t1;
+  pass(`IdentityResolver warm call (cache hit): ${warmMs}ms`);
+  if (warmMs > 100) {
+    console.log(
+      `     ⚠️  Warm call >100ms — index lookup should be much faster, investigate.`
+    );
+  }
+
+  // Verify flush actually drops the cache: third call should be cold again.
+  resolver.flush();
+  const t2 = Date.now();
+  await resolver.resolveIdentity("yetanother@nowhere.invalid");
+  const flushedMs = Date.now() - t2;
+  if (flushedMs < coldMs / 4) {
+    throw new Error(
+      `flush() didn't drop cache — post-flush call (${flushedMs}ms) suspiciously close to warm (${warmMs}ms), expected closer to cold (${coldMs}ms)`
+    );
+  }
+  pass(`IdentityResolver.flush() drops cache (post-flush: ${flushedMs}ms)`);
+} catch (err) {
+  fail("E. v4 IdentityResolver", err);
+} finally {
+  await contactsForIdentity.disconnect();
 }
 
 // ── Summary ──

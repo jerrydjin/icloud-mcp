@@ -24,7 +24,7 @@ Per ENG-6 decision: the same conditional-PUT machinery is needed for VTODO write
 ## v4: Full identity dedup (multi-email, fuzzy name)
 **What:** Extend `src/utils/identity.ts` (created in v3 with `canonicalEmail()`) to handle multi-email contacts (work + personal), fuzzy name matching (Jane Smith vs J. Smith), and phone-number fallback when no email exists.
 **Why:** v3 minimal email-based dedup (ENG-15) handles 80% of cases; the remaining 20% (multi-email contacts, attendees-by-name) makes find/triage feel half-broken. Without this, a `find` for "Jane" returns multiple records for the same person.
-**Context:** v3.0 ships canonicalEmail() promoted from cross.ts:238. v4 adds: multi-email dedupe via Contacts cross-reference, fuzzy name matching with edit-distance, contact-graph resolution. Decision deliberately deferred from v3 to keep ship scope tight; revisit when a verb breaks because of it.
+**Context:** v3.0 ships canonicalEmail() promoted from cross.ts:238. v4 adds: multi-email dedupe via Contacts cross-reference, fuzzy name matching with edit-distance, contact-graph resolution. Eng review (2026-04-30) decided to extend `matchContacts()` rather than fork a parallel system, and reuse `DiscoveryCache` for the per-request identity index. Ship gate item: when M4.1.5 lands, update the stale doc-comment at src/utils/identity.ts:1-10 (currently says "deferred to v4").
 **Depends on:** v3.0 ships with minimal dedup utility in place.
 
 ## v4: macOS Keychain credential storage
