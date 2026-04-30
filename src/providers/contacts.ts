@@ -1,6 +1,11 @@
 import type { DAVAddressBook } from "tsdav";
 import { CalDavTransport } from "./caldav-transport.js";
 import { requireOkAndEtag, requireOkAndEtagOrConflict } from "./icloud-quirks.js";
+import {
+  FUZZY_NAME_THRESHOLD,
+  levenshteinSimilarity,
+  normalizeNameTokens,
+} from "../utils/identity.js";
 
 // ContactsProvider speaks CardDAV. iCloud's CardDAV endpoint is separate from CalDAV
 // (https://contacts.icloud.com), but auth is the same app-specific password.
@@ -492,7 +497,7 @@ function buildVCard(input: {
   if (input.note) {
     lines.push(`NOTE:${escapeVCardValue(input.note)}`);
   }
-  lines.push(`PRODID:-//icloud-mcp//v3//EN`);
+  lines.push(`PRODID:-//icloud-mcp//v4//EN`);
   lines.push(`REV:${new Date().toISOString().replace(/[-:.]/g, "").slice(0, 15) + "Z"}`);
   lines.push("END:VCARD");
   return lines.join("\r\n") + "\r\n";
@@ -540,9 +545,20 @@ export function mergeContactForUpdate(
 }
 
 /**
- * Match contacts against a query. Tries email-exact-match first (case-insensitive),
- * then name-substring match (case-insensitive), then phone-substring match.
- * Returns up to 50 matches in relevance order.
+ * Match contacts against a query. Strategies in order:
+ *   1. Email-exact (case-insensitive)
+ *   2. Name/email/phone substring
+ *   3. Fuzzy name (Levenshtein, default threshold 0.85)
+ *
+ * Strategy 3 only runs when 1 and 2 produced no results AND the query looks
+ * like a name (no '@', no digits) — typing "jaen" finds "jane" but typing
+ * "jane@example.com" doesn't fuzzy-match a different person.
+ *
+ * To bound cost, fuzzy matching first prefix-prunes the candidate set: only
+ * Contacts whose name shares at least the first 2 characters of any query
+ * token survive to the Levenshtein pass.
+ *
+ * Returns up to 50 matches in relevance order (exact → partial → fuzzy).
  */
 export function matchContacts(contacts: Contact[], query: string): Contact[] {
   const q = query.trim().toLowerCase();
@@ -575,5 +591,86 @@ export function matchContacts(contacts: Contact[], query: string): Contact[] {
     }
   }
 
-  return [...exactEmailMatches, ...partialMatches].slice(0, 50);
+  const exactAndPartial = [...exactEmailMatches, ...partialMatches];
+
+  // Fuzzy fallback: only when nothing else matched AND the query looks like a name
+  if (exactAndPartial.length === 0) {
+    const looksLikeName = !q.includes("@") && !/\d/.test(q);
+    if (looksLikeName) {
+      const fuzzy = fuzzyNameMatches(contacts, q);
+      return fuzzy.slice(0, 50);
+    }
+  }
+
+  return exactAndPartial.slice(0, 50);
+}
+
+/**
+ * Two-stage fuzzy name match against a Contacts list:
+ *   Stage 1 (prune): keep contacts whose any name token shares a 2-char prefix
+ *     with any query token. Cheap O(N) pass.
+ *   Stage 2 (rank):  Levenshtein similarity on the pruned candidates against
+ *     the full query string + each token. Keep matches above the threshold.
+ *
+ * Returns matches sorted by best-similarity descending. Exported for tests.
+ */
+export function fuzzyNameMatches(
+  contacts: Contact[],
+  query: string,
+  threshold: number = FUZZY_NAME_THRESHOLD
+): Contact[] {
+  const queryTokens = normalizeNameTokens(query);
+  if (queryTokens.length === 0) return [];
+
+  const prefixes = new Set(
+    queryTokens.filter((t) => t.length >= 2).map((t) => t.slice(0, 2))
+  );
+  if (prefixes.size === 0) return [];
+
+  // Stage 1: prefix prune
+  const pruned: Contact[] = [];
+  for (const c of contacts) {
+    const candidateTokens = [
+      ...normalizeNameTokens(c.fullName),
+      ...normalizeNameTokens(c.givenName ?? ""),
+      ...normalizeNameTokens(c.familyName ?? ""),
+    ];
+    const hit = candidateTokens.some((ct) =>
+      prefixes.has(ct.slice(0, 2))
+    );
+    if (hit) pruned.push(c);
+  }
+
+  // Stage 2: Levenshtein
+  const scored: { contact: Contact; score: number }[] = [];
+  const queryNormalized = queryTokens.join(" ");
+  for (const c of pruned) {
+    const candidateStrings = [
+      c.fullName,
+      c.givenName ?? "",
+      c.familyName ?? "",
+      normalizeNameTokens(c.fullName).join(" "),
+    ].filter((s) => s.length > 0);
+
+    let best = 0;
+    for (const cs of candidateStrings) {
+      const s = levenshteinSimilarity(queryNormalized, cs);
+      if (s > best) best = s;
+      // Also score against each query token vs each candidate token, taking
+      // the best per-token match — handles "Smith" matching "Jane Smith".
+      for (const qt of queryTokens) {
+        for (const ct of normalizeNameTokens(cs)) {
+          const ts = levenshteinSimilarity(qt, ct);
+          if (ts > best) best = ts;
+        }
+      }
+    }
+
+    if (best >= threshold) {
+      scored.push({ contact: c, score: best });
+    }
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored.map((s) => s.contact);
 }

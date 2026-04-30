@@ -3,6 +3,7 @@ import {
   parseVCard,
   mergeContactForUpdate,
   matchContacts,
+  fuzzyNameMatches,
   type Contact,
 } from "../src/providers/contacts.js";
 
@@ -267,5 +268,63 @@ describe("matchContacts", () => {
     const r = matchContacts(sampleContacts, "ALICE");
     expect(r).toHaveLength(1);
     expect(r[0]!.uid).toBe("1");
+  });
+
+  // ── M4.1: fuzzy name fallback ──
+
+  test("fuzzy match: 1-edit typo on a longer name resolves", () => {
+    // "Andersn" is one delete from "Anderson" (8 chars → similarity 0.875,
+    // above the 0.85 threshold). Doesn't substring-match, fuzzy fallback catches it.
+    const r = matchContacts(sampleContacts, "Andersn");
+    expect(r).toHaveLength(1);
+    expect(r[0]!.uid).toBe("1");
+  });
+
+  test("fuzzy match: 1-edit typo via substitution resolves", () => {
+    // "Andersan" is one substitution from "Anderson" → similarity 0.875
+    const r = matchContacts(sampleContacts, "Andersan");
+    expect(r.length).toBeGreaterThanOrEqual(1);
+    expect(r.map((c) => c.uid)).toContain("1");
+  });
+
+  test("fuzzy fallback only fires when partial match yields nothing", () => {
+    // "Alice" substring-matches "Alice Anderson" so fuzzy fallback is NOT invoked
+    // and result count stays at 1 (not pulling in fuzzy-but-wrong matches)
+    const r = matchContacts(sampleContacts, "Alice");
+    expect(r).toHaveLength(1);
+    expect(r[0]!.uid).toBe("1");
+  });
+
+  test("fuzzy fallback skipped for email-shaped queries", () => {
+    // An unknown email shouldn't fuzzy-match a name
+    const r = matchContacts(sampleContacts, "xyz@nowhere.com");
+    expect(r).toEqual([]);
+  });
+
+  test("fuzzy fallback skipped for digit-only queries (treated as phone)", () => {
+    const r = matchContacts(sampleContacts, "9999");
+    expect(r).toEqual([]);
+  });
+
+  test("totally different name does not fuzzy-match", () => {
+    const r = matchContacts(sampleContacts, "Robert");
+    expect(r).toEqual([]);
+  });
+});
+
+describe("fuzzyNameMatches", () => {
+  test("threshold 0.85 catches single-edit typos", () => {
+    const r = fuzzyNameMatches(sampleContacts, "Anderssn"); // 1 edit from Anderson
+    expect(r.map((c) => c.uid)).toContain("1");
+  });
+
+  test("threshold 0.85 rejects very different names", () => {
+    const r = fuzzyNameMatches(sampleContacts, "Zelda");
+    expect(r).toEqual([]);
+  });
+
+  test("custom threshold can loosen matching", () => {
+    const r = fuzzyNameMatches(sampleContacts, "Brwn", 0.7);
+    expect(r.map((c) => c.uid)).toContain("2");
   });
 });
