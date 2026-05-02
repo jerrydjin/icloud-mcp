@@ -16,6 +16,8 @@ import { CalDavTransport, type DAVCalendar } from "./caldav-transport.js";
 import {
   requireOkAndEtag,
   requireOkAndEtagOrConflict,
+  requireOkOrUidExists,
+  UidExistsError,
   iCalErrorExcerpt,
 } from "./icloud-quirks.js";
 
@@ -168,22 +170,53 @@ export class RemindersProvider extends CalDavTransport {
     listUrl: string,
     input: CreateReminderInput
   ): Promise<Reminder> {
+    return this.putReminderWithUid(listUrl, crypto.randomUUID(), input);
+  }
+
+  /**
+   * Idempotent reminder put. Caller supplies a deterministic UID; if a VTODO
+   * with that UID already exists on the server (412 from `If-None-Match: *`),
+   * we GET it and return as if we had created it. Used by triage_commit (M4.2)
+   * so retries with the same idempotencyKey produce zero duplicates.
+   *
+   * For random-UID creation, callers should use `createReminder` which delegates
+   * here with `crypto.randomUUID()`.
+   */
+  async putReminderWithUid(
+    listUrl: string,
+    uid: string,
+    input: CreateReminderInput
+  ): Promise<Reminder> {
     await this.ensureConnected();
     const listName = await this.getListName(listUrl);
 
-    const uid = crypto.randomUUID();
     const timezone = resolveTimezone(input.timezone);
     const iCalString = buildVTodoString({ uid, ...input, timezone });
 
-    const response = await this.dav.createCalendarObject({
-      calendar: { url: listUrl } as DAVCalendar,
-      filename: `${uid}.ics`,
-      iCalString,
-    });
+    let etag: string;
+    try {
+      const response = await this.dav.createCalendarObject({
+        calendar: { url: listUrl } as DAVCalendar,
+        filename: `${uid}.ics`,
+        iCalString,
+        headers: { "If-None-Match": "*" },
+      });
+      etag = await requireOkOrUidExists(response, iCalErrorExcerpt(iCalString));
+    } catch (err) {
+      if (err instanceof UidExistsError) {
+        // Idempotent replay: GET the existing reminder and return it as if
+        // we just created it. Caller can tell apart by checking whether the
+        // returned reminder.summary matches what was passed in.
+        const existing = await this.getReminder(listUrl, uid);
+        if (existing) return existing;
+        // 412 said it exists but we can't fetch it back. Surface as the same
+        // error type; caller can decide how to recover.
+        throw err;
+      }
+      throw err;
+    }
 
-    const etag = await requireOkAndEtag(response, iCalErrorExcerpt(iCalString));
-    const resultUrl = response.url || `${listUrl}${uid}.ics`;
-
+    const resultUrl = `${listUrl}${uid}.ics`;
     let due: TimezoneAwareTime | undefined;
     if (input.due) {
       due = isUtcTimezone(timezone)

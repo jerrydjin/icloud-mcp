@@ -20,6 +20,8 @@ import { CalDavTransport, type DAVCalendar } from "./caldav-transport.js";
 import {
   requireOkAndEtag,
   requireOkAndEtagOrConflict,
+  requireOkOrUidExists,
+  UidExistsError,
   iCalErrorExcerpt,
 } from "./icloud-quirks.js";
 
@@ -151,6 +153,23 @@ export class CalDavProvider extends CalDavTransport {
     calendarUrl: string,
     event: CreateEventInput
   ): Promise<CalendarEvent> {
+    return this.putEventWithUid(calendarUrl, crypto.randomUUID(), event);
+  }
+
+  /**
+   * Idempotent event put. Caller supplies a deterministic UID; if a VEVENT with
+   * that UID already exists on the server (412 from `If-None-Match: *`), we GET
+   * it and return as if we had created it. Used by triage_commit (M4.2) so
+   * retries with the same idempotencyKey produce zero duplicates.
+   *
+   * For random-UID creation, callers should use `createEvent` which delegates
+   * here with `crypto.randomUUID()`.
+   */
+  async putEventWithUid(
+    calendarUrl: string,
+    uid: string,
+    event: CreateEventInput
+  ): Promise<CalendarEvent> {
     await this.ensureConnected();
 
     const timezone = resolveTimezone(event.timezone);
@@ -167,7 +186,6 @@ export class CalDavProvider extends CalDavTransport {
       );
     }
 
-    const uid = crypto.randomUUID();
     const calendarName = await this.getCalendarName(calendarUrl);
 
     // Build VCALENDAR with VTIMEZONE component
@@ -273,17 +291,27 @@ export class CalDavProvider extends CalDavTransport {
     comp.addSubcomponent(vevent);
     const iCalString = comp.toString();
 
-    const response = await this.dav.createCalendarObject({
-      calendar: { url: calendarUrl } as DAVCalendar,
-      filename: `${uid}.ics`,
-      iCalString,
-    });
-
-    // iCloud quirk: tsdav returns a raw fetch Response on 4xx/5xx. We need 2xx + ETag
-    // to confirm the write actually landed. requireOkAndEtag throws with a payload
-    // excerpt when iCloud rejects (e.g., malformed RRULE).
-    const etag = await requireOkAndEtag(response, iCalErrorExcerpt(iCalString));
-    const resultUrl = response.url || `${calendarUrl}${uid}.ics`;
+    let etag: string;
+    try {
+      const response = await this.dav.createCalendarObject({
+        calendar: { url: calendarUrl } as DAVCalendar,
+        filename: `${uid}.ics`,
+        iCalString,
+        headers: { "If-None-Match": "*" },
+      });
+      // iCloud quirk: tsdav returns a raw fetch Response on 4xx/5xx. We need
+      // 2xx + ETag to confirm the write landed; 412 means UID already exists
+      // (idempotent replay path). requireOkOrUidExists handles both.
+      etag = await requireOkOrUidExists(response, iCalErrorExcerpt(iCalString));
+    } catch (err) {
+      if (err instanceof UidExistsError) {
+        const existing = await this.getEvent(calendarUrl, uid);
+        if (existing) return existing;
+        throw err;
+      }
+      throw err;
+    }
+    const resultUrl = `${calendarUrl}${uid}.ics`;
 
     // Build TimezoneAwareTime for the return value
     let startTz: TimezoneAwareTime;

@@ -75,6 +75,13 @@ export class SmtpProvider implements ServiceProvider {
     bcc?: string[];
     inReplyTo?: string;
     references?: string[];
+    /**
+     * Override the auto-generated Message-Id header with a deterministic value.
+     * Used by triage_commit's draft leg (M4.2) to make APPEND idempotent: the
+     * same idempotencyKey always derives the same Message-Id, so a SEARCH HEADER
+     * before APPEND can dedupe at the IMAP level. Format: `<...@domain>`.
+     */
+    messageId?: string;
   }): Promise<Buffer> {
     const to = Array.isArray(options.to) ? options.to.join(", ") : options.to;
     const address = options.from ?? this.email;
@@ -91,6 +98,7 @@ export class SmtpProvider implements ServiceProvider {
       text: options.body,
       inReplyTo: options.inReplyTo,
       references: options.references?.join(" "),
+      messageId: options.messageId,
     });
 
     return await mail.compile().build();

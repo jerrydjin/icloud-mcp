@@ -278,6 +278,38 @@ export class ImapProvider implements ServiceProvider {
     }
   }
 
+  /**
+   * Look up a message by RFC 5322 Message-Id header. Returns the IMAP UID of
+   * the matching message in the given folder, or null if no match.
+   *
+   * Used by triage_commit (M4.2) to make the draft APPEND idempotent: derive a
+   * deterministic Message-Id from the idempotencyKey, SEARCH HEADER first, and
+   * if a match exists, reuse that UID instead of APPENDing a duplicate.
+   *
+   * Folder doesn't exist → throws (caller should not retry blindly).
+   */
+  async searchByMessageId(
+    folder: string,
+    messageId: string
+  ): Promise<number | null> {
+    await this.ensureConnected();
+    const lock = await this.client.getMailboxLock(folder);
+    try {
+      // imapflow's search supports `header` criterion: { header: { "message-id": "<...>" } }
+      const result = await this.client.search(
+        { header: { "message-id": messageId } as Record<string, string> },
+        { uid: true }
+      );
+      const uids: number[] = result ? result : [];
+      if (uids.length === 0) return null;
+      // Multiple matches shouldn't happen for a deterministic Message-Id, but
+      // pick the highest UID (most recent) to be safe.
+      return Math.max(...uids);
+    } finally {
+      lock.release();
+    }
+  }
+
   async moveMessage(
     uid: number,
     fromFolder: string,
