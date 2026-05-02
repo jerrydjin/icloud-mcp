@@ -80,6 +80,28 @@ VTODO writes will hit the same patterns as VEVENT. When implementing RemindersPr
 
 ---
 
+## Q8: 412 means two different things depending on the precondition
+
+**What:** iCloud returns HTTP 412 Precondition Failed for both `If-Match: <etag>` (concurrent edit) and `If-None-Match: *` (resource with this UID already exists). The status code is the same, but the semantic is opposite: one is an error, the other is a success-with-replay signal.
+
+**Fix:** Two different validators. `requireOkAndEtagOrConflict` throws `ETagConflictError` (caller refreshes and retries). `requireOkOrUidExists` throws `UidExistsError` (caller GETs the existing resource and returns it as `replayed_existing`).
+
+**Where it bit us:** v4.2 (M4.2) triage_commit needs idempotent CalDAV writes. Deterministic UID + `If-None-Match: *` PUT lets retries dedupe at the protocol level: iCloud returns 412 on the second call, the caller GETs the existing resource. Without the disambiguation, the same 412 would look like a concurrent-edit failure and trigger the wrong recovery path.
+
+**Code:** `src/providers/icloud-quirks.ts` — both validators.
+
+---
+
+## Q9: IMAP UIDPLUS support (informational, not load-bearing)
+
+**What:** RFC 4315 UIDPLUS causes `APPEND` to return the assigned UID synchronously via the `APPENDUID` response. `imapflow.append()` exposes this as `result.uid`. iCloud's IMAP server is widely understood to support UIDPLUS; the smoke test in `bun run smoke-test` confirms it.
+
+**Why it matters:** v4.2 triage_commit's draft leg uses deterministic Message-Id + `SEARCH HEADER Message-Id` BEFORE APPEND for idempotency. If UIDPLUS is on, APPEND returns the UID directly. If UIDPLUS is off, the SEARCH path still works (one extra roundtrip on the create path). SEARCH is load-bearing; UIDPLUS is optimization.
+
+**Code:** `src/providers/imap.ts:339` `append()` returns `{uid?: number}`. Optional `uid` populated only when UIDPLUS is on.
+
+---
+
 ## Adding a new quirk
 
 When you find one:
