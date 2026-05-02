@@ -1,5 +1,98 @@
 # Changelog
 
+## 4.2.0 — Triage verb (M4.2)
+
+The cornerstone v3-design verb. Read a mail message, propose cross-service
+actions (reminder + event + draft), confirm, then commit with deterministic-UID
+idempotency. Re-running commit with the same proposal produces zero duplicate
+iCloud resources.
+
+### Added
+
+- `triage(uid, folder?)` MCP tool — analyzes a mail message and returns a
+  signed `TriagePlan`. Proposes a reminder when the body contains action verbs
+  ("please send", "let me know", "follow up", etc.), an event when an explicit
+  datetime is detected via `chrono-node`, and a draft reply when the message is
+  a question/request from a known correspondent. Calendar overlaps surface in
+  `conflicts` (non-blocking). Identity resolution flows through M4.1's
+  `IdentityResolver` so `proposed.contacts` returns canonical entities.
+- `triage_commit(confirmToken, proposed)` MCP tool — verifies the HMAC-signed
+  token, then executes each leg with deterministic-UID idempotency:
+    - Reminder leg: VTODO PUT with `If-None-Match: *` and a UID derived from
+      the leg's idempotencyKey. 412 from iCloud means "exists already" — we
+      GET-and-return as `replayed_existing`.
+    - Event leg: same pattern via `caldav.putEventWithUid`.
+    - Draft leg: SEARCH HEADER Message-Id BEFORE APPEND with a deterministic
+      Message-Id. If found, return that UID as `replayed_existing`; else
+      APPEND a new draft.
+  Each leg runs independently; one leg's failure doesn't block others. The
+  `partial: true` flag is set when at least one leg failed.
+- `triage_commit_retry(legs, payload)` MCP tool — after the 10-min token
+  window expires (or when only some legs need retrying), retry specific legs
+  by passing the original `idempotencyKeys`. Already-succeeded legs replay
+  via the same idempotency mechanism without duplicates.
+- `src/utils/proposer.ts` — pure functions: `detectActionVerb`,
+  `detectDatetime` (chrono-node + sanity bounds), `detectQuestionOrRequest`.
+- `src/utils/confirm-token.ts` — HMAC-SHA256 sign + verify. Hard gate: throws
+  if `CONFIRM_TOKEN_SECRET` is unset or under 32 chars. Constant-time MAC
+  comparison.
+- `src/verbs/triage-types.ts` — envelope types (`TriagePlan`, `CommitResult`,
+  `RetrySpec`, leg-result discriminated unions).
+- `src/providers/icloud-quirks.ts` — new `UidExistsError` + `requireOkOrUidExists`
+  validator for the `If-None-Match: *` 412 path. Distinct from
+  `ETagConflictError` so triage_commit's catch blocks can route the two
+  semantics correctly.
+- `src/providers/reminders.ts` — new `putReminderWithUid(listUrl, uid, input)`
+  low-level method. Existing `createReminder` becomes a thin wrapper that
+  delegates with `crypto.randomUUID()`.
+- `src/providers/caldav.ts` — new `putEventWithUid(calendarUrl, uid, input)`.
+  Same wrapper-around-low-level pattern.
+- `src/providers/imap.ts` — new `searchByMessageId(folder, messageId)` for
+  the draft leg's SEARCH-before-APPEND idempotency check.
+- `src/providers/smtp.ts` — `buildRawMessage` accepts optional `messageId` so
+  the draft leg can bake in a deterministic header.
+
+### Changed
+
+- `PRODID` in generated VEVENTs bumped to `v4.2`.
+- iCloud-MCP version bumped from `4.1.0` to `4.2.0`.
+
+### Architecture notes
+
+The deterministic-UID idempotency mechanism: same proposal content → same
+idempotencyKey → same UUID/Message-Id → iCloud dedupes at the protocol level.
+Per-leg keys mean a partial-failure retry only re-creates the failed legs;
+already-succeeded legs replay as `replayed_existing` without duplicates.
+
+`confirmToken` is HMAC-signed over the canonicalized proposal hash with a
+10-min `exp`. Single-use enforcement is best-effort (no shared memory across
+Vercel invocations); per-leg idempotency keys do the correctness work. Token
+is integrity-only.
+
+`CONFIRM_TOKEN_SECRET` MUST be a separate env var from `AUTH_TOKEN`. A leaked
+bearer token alone cannot be used to forge triage proposals.
+
+### Tests
+
+54 new M4.2 tests across `proposer.test.ts` (13), `confirm-token.test.ts`
+(13), `triage.test.ts` (22 — fnv1a64, idempotencyKey, UUID/Message-Id
+derivation), `triage-commit.test.ts` (6 — happy path, replay safety, partial
+failure, expired token, tampered proposal). Total 286 tests pass.
+
+### Ship-gate items NOT done in this release
+
+- Live iCloud round-trip smoke test for replay safety against real Calendar +
+  Reminders + Drafts. Run `bun run smoke-test` after deploy with a real
+  triage on a real mail message.
+- Vercel deploy + p95 cold-start measurement post-`chrono-node` install
+  (~80KB bundle delta, well under the 500KB budget — should be fine).
+- Set `CONFIRM_TOKEN_SECRET` in Vercel env vars before first production triage.
+
+### Operational note: chrono-node bundle delta
+
+Measured at M4.2.0: chrono-node adds ~80KB to the bundle (well under the
+500KB budget). ISO-only fallback was NOT needed.
+
 ## 4.1.0 — Identity layer (M4.1)
 
 The first half of the v4 cross-service magic arc. Every name lookup the verbs do

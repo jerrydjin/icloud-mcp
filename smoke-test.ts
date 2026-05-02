@@ -287,6 +287,69 @@ try {
   await contactsForIdentity.disconnect();
 }
 
+// ── F. v4.2 triage proposer (M4.2) — read-only check on a real INBOX message ──
+//
+// Read-only by design: this section calls triage() to verify the proposer
+// runs end-to-end against real mail, but does NOT call triage_commit (which
+// would write reminder + event + draft to your real iCloud). Manual round-
+// trip testing of the commit path is on the M4.2 ship-gate checklist; do
+// that separately on a known-throwaway thread.
+
+console.log("\n[F] v4.2 triage proposer (M4.2) — read-only on a real INBOX message");
+const imapForTriage = new ImapProvider(imapHost, imapPort, email, password);
+const contactsForTriage = new ContactsProvider(carddavUrl, email, password);
+try {
+  const messages = await imapForTriage.listMessages("INBOX", 1, 0);
+  if (messages.messages.length === 0) {
+    console.log("     (skipped: INBOX is empty — nothing to triage)");
+  } else {
+    const target = messages.messages[0]!;
+    pass(`Found target message: UID ${target.uid}, "${target.subject.slice(0, 50)}"`);
+
+    // We don't import triage.ts directly here because doing so would also need
+    // the full VerbContext (caldav, reminders, smtp, identityResolver). Instead
+    // exercise the underlying pieces: fetchAndParseMessage + proposer helpers.
+    const full = await imapForTriage.fetchAndParseMessage(target.uid, "INBOX");
+    pass(`Fetched + parsed message body (${full.textBody.length} chars)`);
+
+    const { detectActionVerb, detectDatetime, detectQuestionOrRequest } =
+      await import("./src/utils/proposer.js");
+    const hasAction = detectActionVerb(full.textBody);
+    const hasDate = detectDatetime(full.textBody);
+    const hasQuestion = detectQuestionOrRequest(full.textBody);
+    pass(
+      `Proposer signals on "${full.subject.slice(0, 40)}": ` +
+        `action=${hasAction}, datetime=${hasDate ? "yes" : "no"}, question=${hasQuestion}`
+    );
+
+    // Verify confirm-token round-trip with the M4.2 secret (or skip if unset)
+    const secret = process.env.CONFIRM_TOKEN_SECRET;
+    if (!secret) {
+      console.log(
+        `     (skipped confirmToken round-trip: CONFIRM_TOKEN_SECRET not set)`
+      );
+    } else {
+      const { signProposal, verifyToken } = await import(
+        "./src/utils/confirm-token.js"
+      );
+      const fakeProposal = { test: { idempotencyKey: "smoke-test" } };
+      const token = await signProposal(fakeProposal, secret);
+      const verify = await verifyToken(token, fakeProposal, secret);
+      if (!verify.valid) {
+        throw new Error(
+          `confirmToken round-trip failed: ${JSON.stringify(verify)}`
+        );
+      }
+      pass(`confirmToken sign + verify round-trip works against real Web Crypto`);
+    }
+  }
+} catch (err) {
+  fail("F. v4.2 triage proposer", err);
+} finally {
+  await imapForTriage.disconnect();
+  await contactsForTriage.disconnect();
+}
+
 // ── Summary ──
 
 console.log("\n=== Summary ===");

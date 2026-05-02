@@ -20,9 +20,23 @@ Mail: `list_folders`, `list_messages`, `read_message`, `search_messages`, `send_
 
 Calendar: `list_calendars`, `list_events`, `get_event`, `create_event`, `update_event` (v3, new), `delete_event`.
 
+**v4 cross-service verbs (the cornerstone, v4.2)**
+
+- `triage(uid, folder?)` — Read a mail message, propose a reminder + event + draft (whichever fit), return a signed `TriagePlan`. Identity resolution flows through M4.1's IdentityResolver so contacts collapse correctly.
+- `triage_commit(confirmToken, proposed)` — Execute the plan after user confirmation. Each leg runs with deterministic-UID idempotency; re-calling within the 10-min token window produces zero duplicate iCloud resources. Partial failures surface with `retrySafe: true` on failed legs.
+- `triage_commit_retry(legs, payload)` — Retry specific failed legs after the token window expires (or when only some legs need retrying). Same per-leg idempotency keys ensure already-succeeded legs replay without duplicates.
+
 **v4 admin tools**
 
 - `identity_cache_flush` — Drop the per-request Contacts cache used by the identity resolver. After editing a Contact in the iCloud Contacts app, call this so the next verb sees the change without restarting the server.
+
+## What v4.2 added (the triage verb)
+
+`triage` is the cornerstone chief-of-staff move that v3 named and deferred. Reads a mail message, proposes the cross-service actions that fit the message, returns a signed plan. After you confirm, `triage_commit` executes each leg with deterministic-UID idempotency so retries dedupe at the iCloud level rather than creating duplicates. The proposer is rules-based for v4.2 (action-verb regex + `chrono-node` for natural-language datetime + question/request detection); LLM-generated suggestions are explicitly v5 work.
+
+The load-bearing correctness claim of v4.2: re-calling `triage_commit` with the same `confirmToken` within its 10-min window produces zero duplicate resources. Per-leg idempotency keys derive deterministic UIDs (CalDAV) and Message-Ids (IMAP); on retry the second PUT returns 412 from `If-None-Match: *` and we GET-and-return the existing resource as `replayed_existing`.
+
+Set `CONFIRM_TOKEN_SECRET` (32+ random bytes) in your environment before using triage. The HMAC signing of `confirmToken` is intentionally separate from `AUTH_TOKEN` so a leaked bearer token can't be used to forge proposals.
 
 ## What v4.1 changed (the identity layer)
 

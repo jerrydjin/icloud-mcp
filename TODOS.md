@@ -21,11 +21,24 @@ The v3 design (chief-of-staff identity, ENG-5 decision: verbs-only for new provi
 ## ~~v3: update_event with ETag conditional PUT~~ BUNDLED INTO v3 M1
 Per ENG-6 decision: the same conditional-PUT machinery is needed for VTODO writes (completeReminder, updateReminder), so update_event for VEVENT lands in M1 alongside the new providers. Single implementation of the etag/If-Match pattern shared across VTODO and VEVENT updates.
 
-## v4: Full identity dedup (multi-email, fuzzy name)
-**What:** Extend `src/utils/identity.ts` (created in v3 with `canonicalEmail()`) to handle multi-email contacts (work + personal), fuzzy name matching (Jane Smith vs J. Smith), and phone-number fallback when no email exists.
-**Why:** v3 minimal email-based dedup (ENG-15) handles 80% of cases; the remaining 20% (multi-email contacts, attendees-by-name) makes find/triage feel half-broken. Without this, a `find` for "Jane" returns multiple records for the same person.
-**Context:** v3.0 ships canonicalEmail() promoted from cross.ts:238. v4 adds: multi-email dedupe via Contacts cross-reference, fuzzy name matching with edit-distance, contact-graph resolution. Eng review (2026-04-30) decided to extend `matchContacts()` rather than fork a parallel system, and reuse `DiscoveryCache` for the per-request identity index. Ship gate item: when M4.1.5 lands, update the stale doc-comment at src/utils/identity.ts:1-10 (currently says "deferred to v4").
-**Depends on:** v3.0 ships with minimal dedup utility in place.
+## v4: Cross-service magic arc — M4.1 shipped, M4.2 next, M4.3 candidate
+
+**M4.1 (Identity Layer): SHIPPED in v4.1.0 (2026-04-30).** Levenshtein fuzzy name match + multi-email collapse + IdentityResolver wired through draft + schedule. identity_cache_flush admin tool added. See CHANGELOG.md.
+
+**M4.2 (Triage Verb): NEXT.** Two-eng-review-cycles design locked. Implementation kicks off after 3-5 days of M4.1 dogfooding. Implementation order:
+- **M4.2.0** — Install `chrono-node`, measure bundle delta + cold-start delta on Vercel before committing. If delta pushes p95 cold-start past 5 sec, fall back to ISO-8601-only regex datetime detection.
+- **M4.2.1** — IMAP UIDPLUS spike: verify iCloud APPEND returns UID via UIDPLUS APPENDUID. Document in `docs/ICLOUD-QUIRKS.md`. Verify `SEARCH HEADER Message-Id` works against iCloud Drafts folder.
+- **M4.2.2** — Add `UidExistsError` + `requireOkOrUidExists` to `src/providers/icloud-quirks.ts` (handle 412 on `If-None-Match: *` PUT as success-with-existing-resource, not error).
+- **M4.2.3** — Add `putReminderWithUid` (reminders.ts) and `putEventWithUid` (caldav.ts) low-level methods. Existing `createReminder`/`createEvent` keep random UUIDs and become thin wrappers around the new methods.
+- **M4.2.4** — Add `ImapProvider.searchByMessageId(folder, messageId): Promise<number | null>`.
+- **M4.2.5** — `src/utils/proposer.ts` (action-verb regex + chrono-node datetime detection + question/request detection, all pure functions). `src/utils/confirm-token.ts` (HMAC-SHA256 sign/verify with new `CONFIRM_TOKEN_SECRET` env var; reject if unset or <32 bytes).
+- **M4.2.6** — `src/verbs/triage-types.ts` (envelope types). `src/verbs/triage.ts` (proposer verb). `src/verbs/triage-commit.ts` (commit + retry handlers, co-located).
+- **M4.2.7** — Tests + smoke-test extension. Critical path: idempotent replay (same token re-called within 10 min produces zero duplicate iCloud resources) + partial-failure path (one leg fails, retrySpec retries just that leg).
+- **M4.2.8** — Add `CONFIRM_TOKEN_SECRET` to `.env.example`, README, and Vercel env vars before deploy.
+
+**M4.3 (Brief Intelligence): CANDIDATE.** Mail priority scoring + reminder context grouping + suggested actions (rules-based). Gated on its own design pass after M4.2 ships and dogfooding produces real friction signals. Cuttable from v4 if the signals don't materialize.
+
+**Depends on:** v4.1 dogfood data lands (3-5 days post-ship), Vercel cold-start measurement validates per-request cache architecture.
 
 ## v4: macOS Keychain credential storage
 **What:** Replace env-var-based auth with macOS Keychain on Mac, falling back to env vars on Linux/Vercel/missing-Keychain.
