@@ -77,3 +77,48 @@ export async function requireOkAndEtagOrConflict(
   }
   return requireOkAndEtag(response, payloadExcerpt);
 }
+
+/**
+ * Sentinel thrown when a CalDAV PUT with `If-None-Match: *` returns 412 because
+ * a resource with the same UID already exists on the server.
+ *
+ * Semantically distinct from ETagConflictError (which signals "the resource you
+ * tried to UPDATE was changed elsewhere"). UidExistsError signals "the resource
+ * you tried to CREATE already exists" and is a SUCCESS path for idempotent
+ * triage_commit retries: GET the existing resource and return it as
+ * `replayed_existing`.
+ *
+ * Both errors come from HTTP 412, but the precondition that failed is different:
+ *   - If-Match: <etag>      → 412 = concurrent edit (ETagConflictError)
+ *   - If-None-Match: *      → 412 = UID exists (UidExistsError)
+ */
+export class UidExistsError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UidExistsError";
+  }
+}
+
+/**
+ * Validate a CalDAV/CardDAV PUT response made with `If-None-Match: *`. Used by
+ * triage_commit for idempotent reminder/event creation: a deterministic UID +
+ * If-None-Match makes retries safe at the iCloud level.
+ *
+ * Outcomes:
+ *   - 2xx + ETag → returns the new ETag (resource created)
+ *   - 412 → throws UidExistsError (resource with this UID already exists; the
+ *     caller should GET-and-return it as replayed_existing)
+ *   - other → throws standard error via requireOkAndEtag
+ */
+export async function requireOkOrUidExists(
+  response: Response,
+  payloadExcerpt: string
+): Promise<string> {
+  if (response.status === 412) {
+    throw new UidExistsError(
+      `Resource with this UID already exists (HTTP 412 on If-None-Match: *). ` +
+        `GET the existing resource. Payload: ${payloadExcerpt}`
+    );
+  }
+  return requireOkAndEtag(response, payloadExcerpt);
+}
