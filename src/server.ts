@@ -28,6 +28,11 @@ import { registerFindVerb } from "./verbs/find.js";
 import { registerDeferVerb } from "./verbs/defer.js";
 import { registerDraftVerb } from "./verbs/draft.js";
 import { registerScheduleVerb } from "./verbs/schedule.js";
+import { registerTriageVerb } from "./verbs/triage.js";
+import {
+  registerTriageCommitVerb,
+  registerTriageCommitRetryVerb,
+} from "./verbs/triage-commit.js";
 
 // Validate required environment variables
 const email = process.env.ICLOUD_EMAIL;
@@ -56,7 +61,7 @@ const contactsProvider = new ContactsProvider(carddavUrl, email, password);
 // Create MCP server
 const server = new McpServer({
   name: "icloud-mcp",
-  version: "4.1.0",
+  version: "4.2.0",
 });
 
 // v4 M4.1: identity resolver, request-scoped on Vercel and process-scoped on stdio
@@ -92,6 +97,9 @@ registerFindVerb(server, verbCtx);
 registerDeferVerb(server, verbCtx);
 registerDraftVerb(server, verbCtx);
 registerScheduleVerb(server, verbCtx);
+registerTriageVerb(server, verbCtx);
+registerTriageCommitVerb(server, verbCtx);
+registerTriageCommitRetryVerb(server, verbCtx);
 
 // Graceful shutdown
 async function shutdown() {

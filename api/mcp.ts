@@ -16,6 +16,11 @@ import { registerFindVerb } from "../src/verbs/find.js";
 import { registerDeferVerb } from "../src/verbs/defer.js";
 import { registerDraftVerb } from "../src/verbs/draft.js";
 import { registerScheduleVerb } from "../src/verbs/schedule.js";
+import { registerTriageVerb } from "../src/verbs/triage.js";
+import {
+  registerTriageCommitVerb,
+  registerTriageCommitRetryVerb,
+} from "../src/verbs/triage-commit.js";
 
 function createServer(): {
   server: McpServer;
@@ -45,7 +50,7 @@ function createServer(): {
 
   const server = new McpServer({
     name: "icloud-mcp",
-    version: "4.1.0",
+    version: "4.2.0",
   });
 
   // v4 M4.1: identity resolver, scoped to this request (Vercel = stateless per call)
@@ -78,6 +83,9 @@ function createServer(): {
   registerDeferVerb(server, verbCtx);
   registerDraftVerb(server, verbCtx);
   registerScheduleVerb(server, verbCtx);
+  registerTriageVerb(server, verbCtx);
+  registerTriageCommitVerb(server, verbCtx);
+  registerTriageCommitRetryVerb(server, verbCtx);
 
   return { server, imapProvider, caldavProvider, remindersProvider, contactsProvider };
 }
