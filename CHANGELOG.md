@@ -1,5 +1,39 @@
 # Changelog
 
+## 4.2.1 — Vercel timeout fix + request logging
+
+Hotfix for triage_commit "shows up then invisible" symptom in MCP clients.
+Root cause: `vercel.json` had `maxDuration: 10` capping every function invocation
+at 10 seconds. triage_commit does up to three sequential iCloud writes (CalDAV
+PUT for reminder, CalDAV PUT for event, IMAP APPEND for draft); each iCloud
+operation runs 1-3s on a good day, plus cold-start auth and DNS. Three legs
+plus setup easily exceeded 10s, so Vercel killed the function mid-stream — the
+MCP client received a partial JSON response, then the connection died and a
+504 timeout error overwrote it. The writes usually succeeded in iCloud anyway,
+but the LLM caller saw the call as failed.
+
+### Fixed
+
+- `vercel.json` — `maxDuration` raised from 10 to 60. 60s is the hobby-tier
+  ceiling and gives 6× headroom for the worst-case three-leg triage_commit.
+
+### Added
+
+- `api/mcp.ts` — minimal request-lifecycle logging on the POST handler. Logs
+  `[mcp] ok method=<rpc-method> tool=<tool-name> dur=<ms>` on success and
+  `[mcp] err ... msg=<err>` on failure. Visible in `vercel logs` and the
+  Vercel dashboard. No auth headers, no request bodies, no secrets — just
+  shape and timing. Lets you see "every triage_commit call takes 8.5s" at a
+  glance instead of debugging blind.
+
+### Notes
+
+This release does not address the underlying single-hung-iCloud-call risk.
+A per-operation timeout pass on the IMAP/CalDAV/SMTP providers is captured in
+TODOS.md as defense-in-depth follow-up. The 60s ceiling means a single hung
+call still kills the function, but takes 60s instead of 10s. In practice this
+is rare with iCloud; the routine timeout cliff is what was hurting daily use.
+
 ## 4.2.0 — Triage verb (M4.2)
 
 The cornerstone v3-design verb. Read a mail message, propose cross-service

@@ -1,6 +1,6 @@
 {
   "name": "icloud-mcp",
-  "version": "4.2.0",
+  "version": "4.2.1",
   "module": "src/server.ts",
   "type": "module",
   "private": true,

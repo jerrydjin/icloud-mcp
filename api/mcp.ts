@@ -50,7 +50,7 @@ function createServer(): {
 
   const server = new McpServer({
     name: "icloud-mcp",
-    version: "4.2.0",
+    version: "4.2.1",
   });
 
   // v4 M4.1: identity resolver, scoped to this request (Vercel = stateless per call)
@@ -107,6 +107,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   if (req.method === "POST") {
+    const startedAt = Date.now();
+    const rpcMethod =
+      typeof req.body === "object" && req.body !== null && "method" in req.body
+        ? String((req.body as { method?: unknown }).method ?? "unknown")
+        : "unknown";
+    const toolName =
+      rpcMethod === "tools/call" &&
+      typeof req.body === "object" &&
+      req.body !== null &&
+      "params" in req.body &&
+      typeof (req.body as { params?: { name?: unknown } }).params === "object"
+        ? String(
+            (req.body as { params?: { name?: unknown } }).params?.name ??
+              "unknown"
+          )
+        : null;
+
     const {
       server,
       imapProvider,
@@ -123,7 +140,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
+      console.log(
+        `[mcp] ok method=${rpcMethod}${toolName ? ` tool=${toolName}` : ""} dur=${Date.now() - startedAt}ms`
+      );
     } catch (error) {
+      console.error(
+        `[mcp] err method=${rpcMethod}${toolName ? ` tool=${toolName}` : ""} dur=${Date.now() - startedAt}ms msg=${error instanceof Error ? error.message : String(error)}`
+      );
       if (!res.headersSent) {
         res.status(500).json({
           jsonrpc: "2.0",
