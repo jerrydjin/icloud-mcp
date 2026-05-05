@@ -1,5 +1,108 @@
 # Changelog
 
+## 4.3.0 — Brief intelligence: response staleness (M4.3 v1)
+
+Every recent inbound message in `daily_brief.mail.recentMessages[]` now knows
+whether *you* are the bottleneck. The brief stops being a list of mail and
+becomes a status of your outbox: who you've left hanging, who's still waiting
+on you, who you've handled. This is M4.1 (identity layer) graduating from
+infrastructure to lead actor.
+
+### Added
+
+- `MessageSummary.messageId: string | null` — populated from `envelope.messageId`
+  on every IMAP fetch path (`listMessages`, `search`). Required precondition
+  for the Sent-folder threading join.
+- `MessageSummary.lastReplyFromYou?: string | null` and
+  `MessageSummary.awaitingYourReply?: boolean` — populated by `daily_brief`
+  on each `recentMessages[]` item. ISO 8601 UTC of your most recent reply, and
+  whether the inbound message is newer than your latest reply (ball is in your
+  court).
+- `imap.resolveSentFolder(): Promise<string | null>` — resolves the Sent
+  folder via RFC 6154 SPECIAL-USE flag (`\Sent`) first, falling back to the
+  well-known names `Sent Messages` / `Sent` / `INBOX.Sent`. Result is cached
+  on the provider instance for the request lifetime; cleared on disconnect.
+  iCloud sets specialUse on `Sent Messages` so the SPECIAL-USE path is the
+  hot path on Apple accounts.
+- `imap.searchSentReplies(folder, messageIds, sinceDays): Promise<SentReplyEntry[]>` —
+  ONE bulk `SEARCH HEADER` against the Sent folder OR'd across both
+  `In-Reply-To` and `References` for every inbound message-id, scoped by
+  `SINCE` to avoid scanning multi-year histories. Single mailbox-lock
+  acquisition, single round trip. Returns `{messageId, inReplyTo,
+  references[], date}` per match for the caller to do the threading join.
+- `parseThreadingHeaders(raw)` — exported pure parser for the
+  In-Reply-To/References header buffer that `imapflow` returns from a
+  `headers: [...]` fetch. Handles RFC 5322 header folding correctly.
+- `enrichResponseStaleness(messages, imap, selfEmail, sinceDays?)` — the
+  composeDailyBrief enrichment function (exported from `src/tools/cross.ts`
+  for testability). Filters self-sent + no-messageId messages out of the
+  IMAP query, runs the bulk SEARCH, joins on In-Reply-To OR References,
+  picks the latest reply by date, and stamps the two new fields. Returns
+  `{messages, replyLookupError?}` for honest degradation.
+- `mail.replyLookupError` on the `daily_brief` response — set when the Sent
+  folder is undetectable or the bulk SEARCH throws. Additive field; absent
+  on the happy path. v2 callers ignore it; v4.3+ callers can show "couldn't
+  check reply history" instead of guessing wrong.
+
+### Changed
+
+- `daily_brief` — wires `enrichResponseStaleness` after the existing
+  `mailResults[0]` resolves. No new round trips on the calendar/reminders
+  paths. The composeDailyBrief input gains an optional `replyLookupError`
+  field; the R1 regression contract (cross.ts:32) is preserved — all v2
+  fields still appear unchanged.
+- `PRODID` and version strings bumped to `v4.3.0` in `package.json`,
+  `src/server.ts`, `api/mcp.ts`.
+
+### Architecture notes (Vercel-serverless honest)
+
+The Sent folder cache lives on the `ImapProvider` instance — per-request on
+Vercel (one cold start = one LIST + N searches), per-process on stdio. This
+matches the M4.1 IdentityResolver and `discovery-cache` patterns. There is no
+cross-invocation cache and no Vercel KV; the design's lock-in (D2 from the
+M4.3 eng review) was per-request compute over reuse-the-cache.
+
+Replies older than 90 days return `lastReplyFromYou: null` and
+`awaitingYourReply: true` — same shape as never-replied. Honest degradation,
+documented in success criteria. Callers wanting longer history can extend the
+`sinceDays` parameter (default 90).
+
+### Dropped from M4.3 v1 (gated on dogfood signal)
+
+Reminder @-mention grouping, structured suggestions, priority scoring,
+attendee context, anomaly highlighting — all become M4.3.1+ candidates. The
+v1 scope deliberately ships ONE sharp wedge: response-staleness. If the
+dogfood-gate (5+ days where the field shapes a triage decision) doesn't hold,
+the entire feature reverts cleanly: additive fields drop, two new IMAP
+methods drop, no other regression.
+
+### Tests
+
+27 new tests across `imap-threading.test.ts` (11 — header parsing edge cases
+including RFC 5322 folding) and `response-staleness.test.ts` (16 — empty +
+skip cases, folder/search error degradation, never-replied,
+matched-via-In-Reply-To, matched-via-References, inbound-newer-than-reply,
+multi-match latest-wins, mixed self-sent/answered/unanswered, custom
+sinceDays). Extended `daily-brief.test.ts` with `replyLookupError` shape
+assertions. Total 313 tests pass; `bun run typecheck` is clean.
+
+### Ship-gate items NOT done in this release
+
+- Live iCloud round-trip via `bun run smoke-test` against a real account to
+  confirm SPECIAL-USE flag resolution + bulk SEARCH HEADER works on iCloud.
+  Section G of the smoke test is pre-wired for this; run before tagging the
+  release.
+- Vercel deploy + p95 cold-start measurement on `daily_brief` before vs after.
+  Ship gate (per design doc): if p95 doubles, the feature reverts.
+- Five-day dogfood window where the field shapes at least one triage decision
+  per day. Soft signal; measured by you, not telemetry.
+
+### Known follow-ups
+
+- 20-clause OR criterion on bulk SEARCH (10 messages × 2 headers): if iCloud
+  rejects, fallback is two SEARCHes (one per header), each with multi-id OR.
+  Documented in `docs/ICLOUD-QUIRKS.md` Q10.
+
 ## 4.2.1 — Vercel timeout fix + request logging
 
 Hotfix for triage_commit "shows up then invisible" symptom in MCP clients.

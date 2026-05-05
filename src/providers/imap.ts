@@ -17,6 +17,10 @@ export class ImapProvider implements ServiceProvider {
   private client: ImapFlow;
   private connected = false;
   private noopInterval: ReturnType<typeof setInterval> | null = null;
+  // Resolved Sent folder path. Cached for the lifetime of this provider
+  // instance, which on Vercel is one Lambda invocation. `undefined` means
+  // not-yet-resolved; `null` means resolution ran and found nothing.
+  private sentFolderPath: string | null | undefined = undefined;
 
   constructor(
     private host: string,
@@ -58,6 +62,9 @@ export class ImapProvider implements ServiceProvider {
       await this.client.logout();
       this.connected = false;
     }
+    // Reset the per-instance Sent folder cache; a fresh connect should
+    // re-resolve in case mailbox layout changed.
+    this.sentFolderPath = undefined;
   }
 
   async ensureConnected(): Promise<void> {
@@ -148,6 +155,7 @@ export class ImapProvider implements ServiceProvider {
           date: msg.envelope?.date?.toISOString() ?? new Date().toISOString(),
           flags: Array.from(msg.flags ?? []),
           hasAttachments: this.hasAttachments(msg.bodyStructure),
+          messageId: msg.envelope?.messageId ?? null,
         });
       }
 
@@ -268,6 +276,7 @@ export class ImapProvider implements ServiceProvider {
           date: msg.envelope?.date?.toISOString() ?? new Date().toISOString(),
           flags: Array.from(msg.flags ?? []),
           hasAttachments: this.hasAttachments(msg.bodyStructure),
+          messageId: msg.envelope?.messageId ?? null,
         });
       }
 
@@ -305,6 +314,114 @@ export class ImapProvider implements ServiceProvider {
       // Multiple matches shouldn't happen for a deterministic Message-Id, but
       // pick the highest UID (most recent) to be safe.
       return Math.max(...uids);
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
+   * Resolve the user's Sent folder path. Returns null if no candidate matches.
+   *
+   * Lookup order:
+   *   1. RFC 6154 SPECIAL-USE flag `\Sent` (most reliable when set).
+   *   2. Path-name match from a well-known list — Apple uses 'Sent Messages';
+   *      other servers use 'Sent' or 'INBOX.Sent'. Case-insensitive.
+   *
+   * Cached on the provider instance for the request lifetime (per-Lambda on
+   * Vercel; per-process on stdio). The cache is dropped on disconnect.
+   */
+  async resolveSentFolder(): Promise<string | null> {
+    if (this.sentFolderPath !== undefined) return this.sentFolderPath;
+    await this.ensureConnected();
+
+    const mailboxes = await this.client.list();
+
+    const bySpecialUse = mailboxes.find(
+      (m) => (m as { specialUse?: string }).specialUse === "\\Sent"
+    );
+    if (bySpecialUse) {
+      this.sentFolderPath = bySpecialUse.path;
+      return this.sentFolderPath;
+    }
+
+    const wellKnown = ["Sent Messages", "Sent", "INBOX.Sent"];
+    for (const candidate of wellKnown) {
+      const match = mailboxes.find(
+        (m) => m.path.toLowerCase() === candidate.toLowerCase()
+      );
+      if (match) {
+        this.sentFolderPath = match.path;
+        return this.sentFolderPath;
+      }
+    }
+
+    this.sentFolderPath = null;
+    return null;
+  }
+
+  /**
+   * Bulk-search the Sent folder for messages whose `In-Reply-To` or
+   * `References` header references any of the given inbound message-ids. Used
+   * by daily_brief (M4.3) to compute response-staleness in ONE round trip.
+   *
+   * Returns the parsed metadata for each matching sent message — caller does
+   * the threading join (matching against original messageIds).
+   *
+   * Empty `messageIds` returns []. Bounded by `sinceDays` SINCE constraint to
+   * avoid scanning multi-year Sent histories; replies older than that are not
+   * returned (caller treats them as never-replied — honest degradation).
+   */
+  async searchSentReplies(
+    folder: string,
+    messageIds: string[],
+    sinceDays: number
+  ): Promise<import("../types.js").SentReplyEntry[]> {
+    if (messageIds.length === 0) return [];
+    await this.ensureConnected();
+
+    const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000);
+
+    // Build OR'd criterion: for each id, two clauses (in-reply-to + references).
+    // imapflow accepts an N-ary `or` array (>=2). With 10 ids × 2 headers = 20
+    // clauses; if iCloud rejects we'll narrow this in a follow-up (OQ#4).
+    const orClauses: Array<{ header: Record<string, string> }> = [];
+    for (const id of messageIds) {
+      orClauses.push({ header: { "in-reply-to": id } });
+      orClauses.push({ header: { "references": id } });
+    }
+
+    const lock = await this.client.getMailboxLock(folder);
+    try {
+      const searchResult = await this.client.search(
+        { or: orClauses, since },
+        { uid: true }
+      );
+      const uids: number[] = searchResult ? searchResult : [];
+      if (uids.length === 0) return [];
+
+      // Fetch envelope + the two threading headers we need to join on.
+      const uidSet = uids.join(",");
+      const entries: import("../types.js").SentReplyEntry[] = [];
+      for await (const msg of this.client.fetch(
+        uidSet,
+        {
+          uid: true,
+          envelope: true,
+          headers: ["in-reply-to", "references"],
+        },
+        { uid: true }
+      )) {
+        const { inReplyTo, references } = parseThreadingHeaders(
+          msg.headers as Buffer | string | undefined
+        );
+        entries.push({
+          messageId: msg.envelope?.messageId ?? null,
+          inReplyTo,
+          references,
+          date: msg.envelope?.date?.toISOString() ?? new Date().toISOString(),
+        });
+      }
+      return entries;
     } finally {
       lock.release();
     }
@@ -425,4 +542,54 @@ export class ImapProvider implements ServiceProvider {
     }
     return [];
   }
+}
+
+/**
+ * Parse the `In-Reply-To` and `References` headers out of a raw IMAP-fetched
+ * header block. `imapflow` returns the requested headers as a single Buffer
+ * (or string) of the literal RFC 5322 lines, e.g.:
+ *
+ *   In-Reply-To: <abc@example.com>\r\n
+ *   References: <root@example.com>\r\n
+ *    <reply@example.com>\r\n
+ *
+ * Continuation lines (folded headers) start with whitespace and concatenate
+ * to the previous header value. References is whitespace-tokenized into a
+ * list of message-ids (still angle-bracket wrapped).
+ *
+ * Exported so tests can pin the parser without booting an IMAP client.
+ */
+export function parseThreadingHeaders(raw: Buffer | string | undefined): {
+  inReplyTo: string | null;
+  references: string[];
+} {
+  if (!raw) return { inReplyTo: null, references: [] };
+  const text = typeof raw === "string" ? raw : raw.toString("utf8");
+
+  // Unfold: a header line that begins with WSP belongs to the previous line.
+  const unfolded = text.replace(/\r?\n[ \t]+/g, " ");
+  const lines = unfolded.split(/\r?\n/);
+
+  let inReplyTo: string | null = null;
+  let referencesRaw = "";
+
+  for (const line of lines) {
+    const colonIdx = line.indexOf(":");
+    if (colonIdx === -1) continue;
+    const name = line.slice(0, colonIdx).trim().toLowerCase();
+    const value = line.slice(colonIdx + 1).trim();
+    if (name === "in-reply-to" && !inReplyTo) {
+      // Pick the first <...> token; some clients append a comment after.
+      const m = value.match(/<[^>]+>/);
+      inReplyTo = m ? m[0] : value || null;
+    } else if (name === "references" && !referencesRaw) {
+      referencesRaw = value;
+    }
+  }
+
+  const references = referencesRaw
+    ? Array.from(referencesRaw.matchAll(/<[^>]+>/g)).map((m) => m[0])
+    : [];
+
+  return { inReplyTo, references };
 }

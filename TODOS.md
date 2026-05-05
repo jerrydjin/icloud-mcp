@@ -21,13 +21,17 @@ The v3 design (chief-of-staff identity, ENG-5 decision: verbs-only for new provi
 ## ~~v3: update_event with ETag conditional PUT~~ BUNDLED INTO v3 M1
 Per ENG-6 decision: the same conditional-PUT machinery is needed for VTODO writes (completeReminder, updateReminder), so update_event for VEVENT lands in M1 alongside the new providers. Single implementation of the etag/If-Match pattern shared across VTODO and VEVENT updates.
 
-## v4: Cross-service magic arc — M4.1 + M4.2 shipped, hotfix in 4.2.1, M4.3 designed
+## v4: Cross-service magic arc — M4.1 + M4.2 + M4.3 v1 shipped, hotfix in 4.2.1
 
 **M4.1 (Identity Layer): SHIPPED in v4.1.0 (2026-04-30).** Levenshtein fuzzy name match + multi-email collapse + IdentityResolver wired through draft + schedule. identity_cache_flush admin tool added. See CHANGELOG.md.
 
 **M4.2 (Triage Verb): SHIPPED in v4.2.0 (2026-05-02).** Triage proposer + triage_commit + triage_commit_retry. Deterministic-UID idempotency on all three legs (CalDAV reminder, CalDAV event, IMAP draft). HMAC-signed confirmToken with 10-min replay window. Dogfooded same day; surfaced the Vercel timeout cliff (see 4.2.1 hotfix below).
 
 **v4.2.1 hotfix (2026-05-02):** Bumped `vercel.json` maxDuration from 10s to 60s. The 10s ceiling was killing triage_commit mid-stream — the MCP client saw the partial response then a 504 overwrote it ("shows up then invisible" symptom). Added minimal request-lifecycle logging in `api/mcp.ts` so the next debug round isn't blind.
+
+**M4.3 v1 (Response Staleness): SHIPPED in v4.3.0 (2026-05-05).** Per-item `lastReplyFromYou: ISO | null` + `awaitingYourReply: boolean` on `daily_brief.mail.recentMessages[]`, computed via ONE bulk IMAP `SEARCH HEADER` against the Sent folder per cold start (90d SINCE). New `MessageSummary.messageId`, `imap.resolveSentFolder()`, `imap.searchSentReplies()`, `parseThreadingHeaders()` (exported pure parser), and `enrichResponseStaleness()` helper exported from `src/tools/cross.ts`. Self-sent INBOX messages get `awaitingYourReply: false`; never-replied gets `awaitingYourReply: true`; honest degradation via `mail.replyLookupError` when Sent folder undetectable. R1 contract preserved (additive fields only). 27 new tests across `imap-threading.test.ts` + `response-staleness.test.ts`; smoke-test section G pre-wired. New ICLOUD-QUIRKS Q10 documents the SPECIAL-USE / SEARCH HEADER / 20-clause OR assumptions.
+
+**M4.3 v1 ship-gate items NOT yet done:** (1) live iCloud round-trip via `bun run smoke-test`; (2) Vercel deploy + p95 cold-start delta; (3) 5-day dogfood window where the field shapes ≥1 triage decision/day.
 
 **M4.2 (Triage Verb): SHIPPED — historical implementation order kept for context.** Two-eng-review-cycles design locked. Implementation kicked off after 3-5 days of M4.1 dogfooding. Implementation order:
 - **M4.2.0** — Install `chrono-node`, measure bundle delta + cold-start delta on Vercel before committing. If delta pushes p95 cold-start past 5 sec, fall back to ISO-8601-only regex datetime detection.

@@ -30,6 +30,9 @@ function getTimezoneOffsetMs(dateStr: string, timezone: string): number {
  * `date`, `displayTimezone`, `calendar.events[]`, `calendar.eventCount`,
  * `calendar.nextEvent`, `mail.unreadCount`, `mail.flaggedCount`, and
  * `mail.recentMessages` exactly as before. v3 adds the `reminders` section.
+ * v4.3 adds `mail.replyLookupError` when Sent-folder lookup fails and per-item
+ * `lastReplyFromYou` / `awaitingYourReply` are baked into recentMessages
+ * before the brief is composed.
  */
 export function composeDailyBrief(input: {
   date: string;
@@ -42,6 +45,7 @@ export function composeDailyBrief(input: {
   flaggedCount: number;
   recentMessages: MessageSummary[];
   mailError?: string;
+  replyLookupError?: string;
   reminders: Reminder[];
   overdueCount: number;
   dueTodayCount: number;
@@ -67,6 +71,9 @@ export function composeDailyBrief(input: {
       flaggedCount: input.flaggedCount,
       recentMessages: input.recentMessages,
       ...(input.mailError ? { error: input.mailError } : {}),
+      ...(input.replyLookupError
+        ? { replyLookupError: input.replyLookupError }
+        : {}),
     },
     reminders: {
       items: displayedReminders,
@@ -76,6 +83,98 @@ export function composeDailyBrief(input: {
       ...(input.reminderError ? { error: input.reminderError } : {}),
     },
   };
+}
+
+/**
+ * v4.3: enrich each recent inbound message with response-staleness fields.
+ *
+ * For every `recentMessages[i]`:
+ *   - `lastReplyFromYou`: ISO date of your most recent sent reply to this
+ *     thread (matched via In-Reply-To OR References referencing msg.messageId),
+ *     or null if no reply within the SINCE window or the lookup was skipped.
+ *   - `awaitingYourReply`: true when no reply found, OR when the inbound
+ *     message is newer than your latest reply (they wrote back, ball is in
+ *     your court). False on self-sent INBOX messages, on messages without a
+ *     Message-Id, and when your latest reply post-dates the inbound message.
+ *
+ * Returns the enriched array plus an optional `replyLookupError` that the
+ * caller stamps onto `mail.replyLookupError`. Single bulk IMAP SEARCH per
+ * call (one mailbox lock acquisition); empty candidate set short-circuits.
+ */
+export async function enrichResponseStaleness(
+  messages: MessageSummary[],
+  imap: ImapProvider,
+  selfEmail: string,
+  sinceDays = 90
+): Promise<{ messages: MessageSummary[]; replyLookupError?: string }> {
+  if (messages.length === 0) return { messages };
+
+  const isCandidate = (m: MessageSummary): boolean =>
+    !!m.messageId && !sameEmail(m.from.address, selfEmail);
+
+  const noopFor = (m: MessageSummary): MessageSummary => ({
+    ...m,
+    lastReplyFromYou: null,
+    awaitingYourReply: false,
+  });
+
+  const candidates = messages.filter(isCandidate);
+  if (candidates.length === 0) {
+    return { messages: messages.map(noopFor) };
+  }
+
+  let sentFolder: string | null;
+  try {
+    sentFolder = await imap.resolveSentFolder();
+  } catch (err) {
+    return {
+      messages: messages.map(noopFor),
+      replyLookupError: `Sent folder lookup failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  if (!sentFolder) {
+    return {
+      messages: messages.map(noopFor),
+      replyLookupError: "Sent folder not found",
+    };
+  }
+
+  let replies: Awaited<ReturnType<ImapProvider["searchSentReplies"]>>;
+  try {
+    replies = await imap.searchSentReplies(
+      sentFolder,
+      candidates.map((c) => c.messageId!),
+      sinceDays
+    );
+  } catch (err) {
+    return {
+      messages: messages.map(noopFor),
+      replyLookupError: `Sent folder search failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  const enriched = messages.map((m): MessageSummary => {
+    if (!isCandidate(m)) return noopFor(m);
+    const matches = replies.filter(
+      (r) =>
+        r.inReplyTo === m.messageId ||
+        (r.references.length > 0 && r.references.includes(m.messageId!))
+    );
+    if (matches.length === 0) {
+      return { ...m, lastReplyFromYou: null, awaitingYourReply: true };
+    }
+    const latest = matches.reduce((a, b) =>
+      new Date(a.date).getTime() >= new Date(b.date).getTime() ? a : b
+    );
+    return {
+      ...m,
+      lastReplyFromYou: latest.date,
+      awaitingYourReply:
+        new Date(m.date).getTime() > new Date(latest.date).getTime(),
+    };
+  });
+
+  return { messages: enriched };
 }
 
 export function registerCrossTools(
@@ -185,6 +284,7 @@ export function registerCrossTools(
       let flaggedCount = 0;
       let recentMessages: MessageSummary[] = [];
       let mailError: string | undefined;
+      let replyLookupError: string | undefined;
 
       const mailResults = await Promise.allSettled([
         imapProvider.listMessages("INBOX", 10, 0),
@@ -205,6 +305,18 @@ export function registerCrossTools(
       }
       if (mailResults[2].status === "fulfilled") {
         flaggedCount = mailResults[2].value.total;
+      }
+
+      // v4.3: stamp lastReplyFromYou + awaitingYourReply on each recent
+      // message via ONE bulk SEARCH against the Sent folder (90d SINCE).
+      if (recentMessages.length > 0) {
+        const enriched = await enrichResponseStaleness(
+          recentMessages,
+          imapProvider,
+          email
+        );
+        recentMessages = enriched.messages;
+        replyLookupError = enriched.replyLookupError;
       }
 
       // Fetch reminders (v3 chief-of-staff): overdue + due-today across all lists
@@ -265,6 +377,7 @@ export function registerCrossTools(
         flaggedCount,
         recentMessages,
         mailError,
+        replyLookupError,
         reminders: dueReminders,
         overdueCount,
         dueTodayCount,

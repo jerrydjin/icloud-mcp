@@ -30,6 +30,7 @@ const sampleMessage: MessageSummary = {
   date: "2026-04-28T15:00:00.000Z",
   flags: [],
   hasAttachments: false,
+  messageId: "<sample-msg-1@example.com>",
 };
 
 const sampleReminder: Reminder = {
@@ -120,6 +121,23 @@ describe("R1: daily_brief shape backwards-compat (CRITICAL regression test)", ()
     });
     expect((withErr.mail as Record<string, unknown>).error).toBe(
       "Mail fetch failed: ECONNRESET"
+    );
+  });
+
+  test("mail.replyLookupError absent when not provided (v4.3 additive)", () => {
+    const brief = composeDailyBrief(baseInput);
+    expect(
+      (brief.mail as Record<string, unknown>).replyLookupError
+    ).toBeUndefined();
+  });
+
+  test("mail.replyLookupError appears when set (v4.3 honest degradation)", () => {
+    const brief = composeDailyBrief({
+      ...baseInput,
+      replyLookupError: "Sent folder not found",
+    });
+    expect((brief.mail as Record<string, unknown>).replyLookupError).toBe(
+      "Sent folder not found"
     );
   });
 

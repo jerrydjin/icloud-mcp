@@ -17,6 +17,32 @@ export interface MessageSummary {
   date: string;
   flags: string[];
   hasAttachments: boolean;
+  // RFC 5322 Message-Id from the envelope. May be null if the message lacks
+  // the header (rare; some mailing-list bounces strip it).
+  messageId: string | null;
+  // v4.3 response-staleness (populated by daily_brief; null elsewhere).
+  // ISO 8601 UTC of the most recent reply YOU sent to this thread, or null
+  // if no reply found (or undetectable: Sent folder unresolvable, no
+  // messageId, or self-sent INBOX message).
+  lastReplyFromYou?: string | null;
+  // True when this message has no reply from you, or the message is newer
+  // than your latest reply (they wrote back; ball is in your court).
+  // Defaults true on the never-replied path; false on self-sent messages.
+  awaitingYourReply?: boolean;
+}
+
+// v4.3: a sent message that potentially replies to one of a set of inbound
+// messages. Returned by ImapProvider.searchSentReplies in batched form so
+// daily_brief can join Sent → INBOX without N round trips.
+export interface SentReplyEntry {
+  // The sent message's own Message-Id (informational; not used for matching).
+  messageId: string | null;
+  // Value of the In-Reply-To header on the sent message, if any.
+  inReplyTo: string | null;
+  // Whitespace-tokenized References header on the sent message.
+  references: string[];
+  // ISO 8601 UTC of envelope.date.
+  date: string;
 }
 
 export interface MessageFull {

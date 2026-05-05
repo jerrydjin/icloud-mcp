@@ -93,6 +93,20 @@ try {
     pass(
       `MessageSummary v2 shape: uid=${m.uid}, subject preserved, from.address present`
     );
+
+    // M4.3 (v4.3): messageId now populated from envelope.messageId. Required
+    // for the Sent-folder threading join in daily_brief response-staleness.
+    if (!("messageId" in m)) {
+      throw new Error("M4.3: MessageSummary.messageId field missing");
+    }
+    if (m.messageId !== null && typeof m.messageId !== "string") {
+      throw new Error(
+        `M4.3: MessageSummary.messageId expected string|null, got ${typeof m.messageId}`
+      );
+    }
+    pass(
+      `M4.3 MessageSummary shape: messageId present (${m.messageId ? "populated" : "null"})`
+    );
   }
 } catch (err) {
   fail("A. v2 Mail (IMAP)", err);
@@ -348,6 +362,97 @@ try {
 } finally {
   await imapForTriage.disconnect();
   await contactsForTriage.disconnect();
+}
+
+// ── G. v4.3 response-staleness — Sent folder + bulk SEARCH HEADER ──
+//
+// Verifies the M4.3 IMAP additions against a live iCloud account:
+//   1. resolveSentFolder() finds the Sent folder (Apple convention is
+//      'Sent Messages'; specialUse=\Sent should also match).
+//   2. searchSentReplies() runs against a real recent inbound messageId
+//      without throwing (proves SEARCH HEADER + OR criterion work on iCloud).
+//
+// READ-ONLY. No writes; no destructive paths.
+
+console.log("\n[G] v4.3 response-staleness (M4.3) — Sent folder + bulk SEARCH HEADER");
+const imapForStaleness = new ImapProvider(imapHost, imapPort, email, password);
+try {
+  const sentFolder = await imapForStaleness.resolveSentFolder();
+  if (!sentFolder) {
+    throw new Error(
+      "M4.3: resolveSentFolder returned null — daily_brief will mark replyLookupError on every call"
+    );
+  }
+  pass(`resolveSentFolder: "${sentFolder}"`);
+
+  // Re-resolution must hit the cache (instant), not re-LIST.
+  const t0 = Date.now();
+  const cached = await imapForStaleness.resolveSentFolder();
+  const cacheMs = Date.now() - t0;
+  if (cached !== sentFolder) {
+    throw new Error(
+      `M4.3: cache returned different value: first="${sentFolder}" cached="${cached}"`
+    );
+  }
+  if (cacheMs > 50) {
+    console.log(
+      `     ⚠️  Cached resolveSentFolder took ${cacheMs}ms — should be <5ms; cache may not be wired.`
+    );
+  }
+  pass(`resolveSentFolder cache hit: ${cacheMs}ms`);
+
+  // Bulk SEARCH HEADER against a real recent inbound message-id.
+  const inbox = await imapForStaleness.listMessages("INBOX", 5, 0);
+  const probe = inbox.messages.find((m) => m.messageId);
+  if (!probe || !probe.messageId) {
+    console.log(
+      "     (skipped: no recent INBOX message has a Message-Id — can't probe bulk SEARCH)"
+    );
+  } else {
+    const t1 = Date.now();
+    const replies = await imapForStaleness.searchSentReplies(
+      sentFolder,
+      [probe.messageId],
+      90
+    );
+    const searchMs = Date.now() - t1;
+    if (!Array.isArray(replies)) {
+      throw new Error(
+        `M4.3: searchSentReplies must return an array, got ${typeof replies}`
+      );
+    }
+    pass(
+      `searchSentReplies (1 id, 90d SINCE): ${replies.length} match(es) in ${searchMs}ms`
+    );
+    if (searchMs > 5000) {
+      console.log(
+        `     ⚠️  Bulk SEARCH >5s — daily_brief p95 likely degrades; revisit OQ#2.`
+      );
+    }
+    if (replies.length > 0) {
+      const r = replies[0]!;
+      if (
+        !("inReplyTo" in r) ||
+        !("references" in r) ||
+        !("date" in r) ||
+        !("messageId" in r)
+      ) {
+        throw new Error(
+          `M4.3: SentReplyEntry shape missing fields: ${JSON.stringify(Object.keys(r))}`
+        );
+      }
+      if (!Array.isArray(r.references)) {
+        throw new Error("M4.3: SentReplyEntry.references must be string[]");
+      }
+      pass(
+        `SentReplyEntry shape: { messageId, inReplyTo, references[], date }`
+      );
+    }
+  }
+} catch (err) {
+  fail("G. v4.3 response-staleness", err);
+} finally {
+  await imapForStaleness.disconnect();
 }
 
 // ── Summary ──

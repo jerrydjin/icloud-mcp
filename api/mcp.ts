@@ -50,7 +50,7 @@ function createServer(): {
 
   const server = new McpServer({
     name: "icloud-mcp",
-    version: "4.2.1",
+    version: "4.3.0",
   });
 
   // v4 M4.1: identity resolver, scoped to this request (Vercel = stateless per call)

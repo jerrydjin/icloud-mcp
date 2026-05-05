@@ -102,6 +102,42 @@ VTODO writes will hit the same patterns as VEVENT. When implementing RemindersPr
 
 ---
 
+## Q10: SEARCH HEADER on threading headers + Sent folder name (informational)
+
+**What:** v4.3 daily_brief response-staleness joins INBOX message-ids against
+the Sent folder via `client.search({header: {"in-reply-to": id}})` and
+`client.search({header: {"references": id}})`, OR'd into a single call. Two
+related observations:
+
+1. **iCloud Mail sets the Apple-convention `Sent Messages` path AND the RFC
+   6154 `\Sent` SPECIAL-USE flag.** Either resolution path works; the
+   provider tries SPECIAL-USE first because it's the standard.
+2. **`SEARCH HEADER` on `In-Reply-To` and `References` works against iCloud's
+   IMAP server.** Both headers are searchable via the same machinery proven
+   in M4.2 (`searchByMessageId` for `Message-Id`).
+
+**Why it matters:** The whole M4.3 response-staleness feature rides on these
+two assumptions. `searchSentReplies` makes ONE SEARCH call per `daily_brief`
+cold start (single mailbox lock; bounded by 90d SINCE) — fast as long as
+the OR'd HEADER criteria are accepted.
+
+**Open concern (OQ#4 in design doc):** The OR clause grows linearly with the
+recent-message count. With 10 messages × 2 headers = 20 OR clauses. iCloud's
+IMAP server is undocumented on the upper bound; if it ever rejects, the
+fallback is two SEARCHes (one per header) each with a multi-id OR — still
+one round trip per header instead of N. Not implemented today; design doc
+ship gate is "if it works, leave it; if not, narrow."
+
+**Code:** `src/providers/imap.ts` — `resolveSentFolder()` and
+`searchSentReplies()`.
+
+**Where it bit us:** N/A so far (M4.3 v1 just shipped). Smoke-test section G
+is pre-wired to catch a regression on either assumption against a real
+iCloud account. Run `bun run smoke-test` before tagging a release that
+touches either method.
+
+---
+
 ## Adding a new quirk
 
 When you find one:
