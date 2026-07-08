@@ -21,6 +21,8 @@ import {
   registerTriageCommitVerb,
   registerTriageCommitRetryVerb,
 } from "../src/verbs/triage-commit.js";
+import { auth } from "../src/auth.js";
+import { toWebHeaders } from "../src/utils/vercel-web.js";
 
 function createServer(): {
   server: McpServer;
@@ -91,19 +93,45 @@ function createServer(): {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Bearer token auth — this is on the public internet
-  const expected = process.env.AUTH_TOKEN?.trim();
-  if (expected) {
-    const authHeader = req.headers.authorization ?? "";
-    const provided = authHeader.replace(/^Bearer\s+/i, "").trim();
-    if (provided !== expected) {
-      res.status(401).json({
-        jsonrpc: "2.0",
-        error: { code: -32001, message: "Unauthorized" },
-        id: null,
+  // Auth — this is on the public internet. Two accepted credentials:
+  //   1. Legacy static bearer token (AUTH_TOKEN) for stdio/Claude-API callers.
+  //   2. An OAuth access token issued by Better Auth, which is what the Claude
+  //      app obtains via the connector OAuth flow (see src/auth.ts).
+  const staticToken = process.env.AUTH_TOKEN?.trim();
+  const provided = (req.headers.authorization ?? "")
+    .replace(/^Bearer\s+/i, "")
+    .trim();
+
+  let authorized = false;
+  if (staticToken && provided === staticToken) {
+    authorized = true;
+  } else if (provided) {
+    try {
+      const session = await auth.api.getMcpSession({
+        headers: toWebHeaders(req),
       });
-      return;
+      authorized = session !== null && session !== undefined;
+    } catch {
+      // Malformed/expired token — fall through to the 401 challenge below.
+      authorized = false;
     }
+  }
+
+  if (!authorized) {
+    // Point unauthenticated MCP clients at the OAuth discovery metadata so the
+    // Claude app knows to start the connector OAuth flow.
+    const baseUrl =
+      process.env.BETTER_AUTH_URL ?? `https://${req.headers.host ?? ""}`;
+    res.setHeader(
+      "WWW-Authenticate",
+      `Bearer resource_metadata="${baseUrl}/.well-known/oauth-protected-resource"`
+    );
+    res.status(401).json({
+      jsonrpc: "2.0",
+      error: { code: -32001, message: "Unauthorized" },
+      id: null,
+    });
+    return;
   }
 
   if (req.method === "POST") {
