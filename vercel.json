@@ -21,6 +21,10 @@
     {
       "source": "/.well-known/oauth-protected-resource/:path*",
       "destination": "/api/well-known/oauth-protected-resource"
+    },
+    {
+      "source": "/api/auth/:path*",
+      "destination": "/api/auth/[...all]"
     }
   ]
 }
