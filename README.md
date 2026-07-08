@@ -70,7 +70,36 @@ Run the MCP server (stdio transport, for Claude Desktop):
 bun run start
 ```
 
-Or via Vercel for remote access. Once deployed, your MCP endpoint lives at **`https://<your-deployment>.vercel.app/api/mcp`** (StreamableHTTP transport with bearer-token auth — set `AUTH_TOKEN` in your Vercel environment variables; see `api/mcp.ts`).
+Or via Vercel for remote access. Once deployed, your MCP endpoint lives at **`https://<your-deployment>.vercel.app/api/mcp`** (StreamableHTTP transport). It accepts two credentials:
+
+- a static `AUTH_TOKEN` bearer (for stdio callers and the Claude *API*'s `mcp_servers.authorization_token`), and
+- an **OAuth 2.1** access token, which is what the **Claude app** connector requires. See [Connecting to the Claude app (OAuth)](#connecting-to-the-claude-app-oauth) below.
+
+## Connecting to the Claude app (OAuth)
+
+The Claude app (web + desktop "Custom Connectors") only speaks OAuth or no-auth — it can't paste a static token. This server ships an OAuth 2.1 provider (via [Better Auth](https://better-auth.com)) so the app can connect. The OAuth layer only proves the caller is **you** (GitHub sign-in restricted to your email); your iCloud credentials stay server-side and never pass through it.
+
+**Architecture.** The bearer check in `api/mcp.ts` now also accepts Better Auth OAuth tokens. `src/auth.ts` exposes the provider under `/api/auth/*`; `public/sign-in.html` + `public/consent.html` handle login and approval. The flow:
+
+```
+Claude app → /api/mcp (no token)
+          → 401 + WWW-Authenticate → discovery (/.well-known/*)
+          → /api/auth/mcp/authorize → /sign-in → GitHub OAuth
+          → consent (/consent) → auth code → token → /api/mcp (Bearer) ✓
+```
+
+**One-time setup:**
+
+1. **Database (free).** Create a [Neon](https://neon.com) Postgres project (or add Vercel Postgres, which is Neon). Copy the **pooled** connection string into `DATABASE_URL`.
+2. **GitHub OAuth app.** GitHub → Settings → Developer settings → OAuth Apps → New. Set **Authorization callback URL** to `https://<your-deployment>.vercel.app/api/auth/callback/github`. Copy the client id/secret into `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`.
+3. **Env vars.** Set `BETTER_AUTH_URL` (your full deployment origin), `BETTER_AUTH_SECRET` (`openssl rand -hex 32`), and `ALLOWED_EMAILS` (your GitHub account email — this is the single-user gate) in Vercel. See `.env.example`.
+4. **Run migrations.** With the same env in your local `.env`, create the Better Auth tables:
+   ```bash
+   bun run auth:migrate      # or: bunx @better-auth/cli migrate
+   ```
+5. **Add the connector.** In the Claude app, add a custom connector pointing at `https://<your-deployment>.vercel.app/api/mcp`. Claude discovers OAuth, sends you through GitHub sign-in + consent, and connects.
+
+> If your GitHub email is private, GitHub returns a `…@users.noreply.github.com` address — put that in `ALLOWED_EMAILS` (the first sign-in attempt will show the exact address in the Vercel function logs).
 
 ## Connecting to Claude Desktop
 
@@ -105,8 +134,17 @@ The smoke test exercises every provider (IMAP, SMTP, CalDAV calendars + VTODO, C
 ## Architecture
 
 ```
+api/
+  mcp.ts             Vercel entry — MCP over StreamableHTTP; accepts AUTH_TOKEN or OAuth
+  auth/[...all].ts   Better Auth catch-all (/api/auth/*)
+  well-known/        Root OAuth discovery routes (rewritten from /.well-known/*)
+public/
+  sign-in.html       GitHub sign-in page (loginPage)
+  consent.html       One-click OAuth consent page
 src/
+  auth.ts            Better Auth OAuth provider (mcp plugin, GitHub, single-user gate)
   server.ts          MCP server, instantiates providers, registers tools+verbs
+  utils/vercel-web.ts  Vercel (req,res) ↔ Web Request/Response bridge for Better Auth
   providers/
     caldav-transport.ts    Shared CalDAV/CardDAV connection base class
     icloud-quirks.ts       requireOkAndEtag + ETagConflictError + iCalErrorExcerpt

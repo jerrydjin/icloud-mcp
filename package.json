@@ -9,12 +9,15 @@
     "smoke-test": "bun run smoke-test.ts",
     "smoke-test:icloud": "bun run smoke-test.ts",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "auth:generate": "bunx @better-auth/cli generate",
+    "auth:migrate": "bunx @better-auth/cli migrate"
   },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/mailparser": "^3.4.6",
     "@types/nodemailer": "^8.0.0",
+    "@types/pg": "^8.11.10",
     "@vercel/node": "^5.7.4"
   },
   "peerDependencies": {
@@ -22,11 +25,13 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-auth": "^1.5.0",
     "chrono-node": "^2.9.0",
     "ical.js": "^2.2.1",
     "imapflow": "^1.3.1",
     "mailparser": "^3.9.8",
     "nodemailer": "^8.0.5",
+    "pg": "^8.13.1",
     "timezones-ical-library": "^2.1.3",
     "tsdav": "^2.1.8"
   }
