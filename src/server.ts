@@ -5,8 +5,9 @@
  * Same app-specific password authenticates IMAP, SMTP, CalDAV, CardDAV.
  *
  * v3 chief-of-staff identity: per-service tools stay for v2 surface (Mail,
- * Calendar). New providers (Reminders, Contacts) are accessible only through
- * cross-service verbs like daily_brief / triage_my_day (per ENG-5).
+ * Calendar). v4.4 adds per-service Reminders tools, superseding ENG-5's
+ * verbs-only rule for that provider — the verbs left no way to create,
+ * complete, or delete a reminder directly. Contacts remains verbs-only.
  */
 
 // Bun loads .env automatically (no dotenv needed)
@@ -23,9 +24,9 @@ import { registerReadTools } from "./tools/read.js";
 import { registerWriteTools } from "./tools/write.js";
 import { registerManageTools } from "./tools/manage.js";
 import { registerCalendarTools } from "./tools/calendar.js";
+import { registerReminderTools } from "./tools/reminders.js";
 import { registerCrossTools } from "./tools/cross.js";
 import { registerFindVerb } from "./verbs/find.js";
-import { registerDeferVerb } from "./verbs/defer.js";
 import { registerDraftVerb } from "./verbs/draft.js";
 import { registerScheduleVerb } from "./verbs/schedule.js";
 import { registerTriageVerb } from "./verbs/triage.js";
@@ -61,7 +62,7 @@ const contactsProvider = new ContactsProvider(carddavUrl, email, password);
 // Create MCP server
 const server = new McpServer({
   name: "icloud-mcp",
-  version: "4.3.1",
+  version: "4.4.0",
 });
 
 // v4 M4.1: identity resolver, request-scoped on Vercel and process-scoped on stdio
@@ -72,6 +73,7 @@ registerReadTools(server, imapProvider, email);
 registerWriteTools(server, imapProvider, smtpProvider);
 registerManageTools(server, imapProvider);
 registerCalendarTools(server, caldavProvider);
+registerReminderTools(server, remindersProvider);
 registerCrossTools(
   server,
   imapProvider,
@@ -94,7 +96,6 @@ const verbCtx = {
   email,
 };
 registerFindVerb(server, verbCtx);
-registerDeferVerb(server, verbCtx);
 registerDraftVerb(server, verbCtx);
 registerScheduleVerb(server, verbCtx);
 registerTriageVerb(server, verbCtx);

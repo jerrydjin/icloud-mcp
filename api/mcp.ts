@@ -11,9 +11,9 @@ import { registerReadTools } from "../src/tools/read.js";
 import { registerWriteTools } from "../src/tools/write.js";
 import { registerManageTools } from "../src/tools/manage.js";
 import { registerCalendarTools } from "../src/tools/calendar.js";
+import { registerReminderTools } from "../src/tools/reminders.js";
 import { registerCrossTools } from "../src/tools/cross.js";
 import { registerFindVerb } from "../src/verbs/find.js";
-import { registerDeferVerb } from "../src/verbs/defer.js";
 import { registerDraftVerb } from "../src/verbs/draft.js";
 import { registerScheduleVerb } from "../src/verbs/schedule.js";
 import { registerTriageVerb } from "../src/verbs/triage.js";
@@ -52,7 +52,7 @@ function createServer(): {
 
   const server = new McpServer({
     name: "icloud-mcp",
-    version: "4.3.1",
+    version: "4.4.0",
   });
 
   // v4 M4.1: identity resolver, scoped to this request (Vercel = stateless per call)
@@ -62,6 +62,7 @@ function createServer(): {
   registerWriteTools(server, imapProvider, smtpProvider);
   registerManageTools(server, imapProvider);
   registerCalendarTools(server, caldavProvider);
+  registerReminderTools(server, remindersProvider);
   registerCrossTools(
     server,
     imapProvider,
@@ -82,7 +83,6 @@ function createServer(): {
     email,
   };
   registerFindVerb(server, verbCtx);
-  registerDeferVerb(server, verbCtx);
   registerDraftVerb(server, verbCtx);
   registerScheduleVerb(server, verbCtx);
   registerTriageVerb(server, verbCtx);
