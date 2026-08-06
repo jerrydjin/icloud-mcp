@@ -306,6 +306,26 @@ export class RemindersProvider extends CalDavTransport {
     };
   }
 
+  async deleteReminder(listUrl: string, uid: string): Promise<boolean> {
+    await this.ensureConnected();
+
+    // Fetch internally to resolve the object URL and etag (self-contained,
+    // mirrors CalDavProvider.deleteEvent).
+    const existing = await this.getReminder(listUrl, uid);
+    if (!existing) {
+      throw new Error(`Reminder with UID ${uid} not found in list ${listUrl}`);
+    }
+
+    await this.dav.deleteCalendarObject({
+      calendarObject: {
+        url: existing.url,
+        etag: existing.etag,
+      },
+    });
+
+    return true;
+  }
+
   // ── Internal helpers ──
 
   private async getListName(listUrl: string): Promise<string> {

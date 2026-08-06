@@ -1,6 +1,6 @@
 # icloud-mcp
 
-Claude as a chief of staff across your iCloud account. An MCP server that bridges Claude Desktop (or any MCP client) to your Mail, Calendar, Reminders, and Contacts so Claude can triage your morning, schedule meetings, draft emails, defer tasks, and search across all four services in a single prompt.
+Claude as a chief of staff across your iCloud account. An MCP server that bridges Claude Desktop (or any MCP client) to your Mail, Calendar, Reminders, and Contacts so Claude can triage your morning, schedule meetings, draft emails, manage tasks, and search across all four services in a single prompt.
 
 The novelty isn't that it bridges iCloud (a handful of MCPs already do that). The novelty is the cross-service verbs that compose across iCloud silos — moving a Mail thread into a Reminder, scheduling around your calendar, drafting an email by contact name instead of email address, all in one call.
 
@@ -12,13 +12,18 @@ The novelty isn't that it bridges iCloud (a handful of MCPs already do that). Th
 - `find` — search across Mail / Calendar / Reminders / Contacts in parallel. Per-service results; no cross-service dedup yet (v4 work).
 - `schedule` — create a calendar event with attendee resolution (names → contact emails) and conflict detection. Tells you what overlaps; lets you confirm.
 - `draft` — save an email draft with contact resolution. Names get looked up in Contacts; ambiguous names surface for user clarification before the draft lands.
-- `defer` — snooze a reminder to a later due date. ETag conditional PUT means concurrent edits surface as a clear error.
 
 **Per-service tools (v2 surface, kept for direct access)**
 
 Mail: `list_folders`, `list_messages`, `read_message`, `search_messages`, `send_email`, `create_draft`, `create_reply_draft`, `send_draft`, `move_message`, `delete_message`, `mark_seen`, `mark_unseen`, `flag_message`, `unflag_message`.
 
 Calendar: `list_calendars`, `list_events`, `get_event`, `create_event`, `update_event` (v3, new), `delete_event`.
+
+Reminders (v4.4, new): `list_reminder_lists`, `list_reminders`, `get_reminder`, `create_reminder`, `update_reminder`, `complete_reminder`, `delete_reminder`.
+
+`update_reminder` replaces the v3 `defer` verb, removed in v4.4 — snoozing is `update_reminder(uid, due)`, with the same ETag conditional PUT and the same all-lists UID search `defer` did.
+
+Reminder UIDs are unique per list, and CalDAV has no cross-collection UID lookup — so every reminder tool that takes a `uid` also takes an optional `list`. Omit it and the server walks every VTODO list to find the UID (one round-trip per list); pass it when you know where the reminder lives. `list_reminders` also accepts `list: 'all'` to fan out across every list at once, with a failing list degrading to a `listErrors` entry rather than failing the call.
 
 **v4 cross-service verbs (the cornerstone, v4.2)**
 
@@ -155,7 +160,7 @@ src/
     reminders.ts           Reminders (VTODO via CalDAV)
     contacts.ts            Contacts (CardDAV with hand-rolled vCard parser)
     identity-cache.ts      v4 IdentityResolver — request-scoped Contacts index
-  tools/             v2 per-service MCP tool registrations
+  tools/             per-service MCP tool registrations (v2 Mail/Calendar, v4.4 Reminders)
   verbs/             v3 cross-service verb registrations + shared envelope
   utils/
     timezone.ts            Resolve / register / convert iCloud-friendly timezones

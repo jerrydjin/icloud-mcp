@@ -1,5 +1,82 @@
 # Changelog
 
+## 4.4.0 — Per-service Reminders tools
+
+Reminders had a full CalDAV-VTODO provider since v3, but no direct tool
+surface: v3's ENG-5 decision routed the provider exclusively through
+cross-service verbs (`daily_brief`, `find`, `defer`, `triage`). That left
+real gaps — no way to create a reminder, mark one done, or delete one
+without asking a verb to do a job it wasn't built for. This release gives
+Reminders the same per-service surface Mail and Calendar already had.
+
+### Added
+
+- `src/tools/reminders.ts` — seven tools, registered in both `src/server.ts`
+  (stdio) and `api/mcp.ts` (Vercel):
+  - `list_reminder_lists` — VTODO collections with name, url, color, ctag.
+  - `list_reminders` — incomplete-first ordering (earliest due first, then
+    undated, then completed). `includeCompleted` defaults false, `limit`
+    caps at 200. `list: 'all'` fans out across every list; a single failing
+    list degrades to a `listErrors[]` entry rather than failing the call,
+    matching `daily_brief`'s per-source error handling.
+  - `get_reminder`, `create_reminder`, `update_reminder`,
+    `complete_reminder`, `delete_reminder`.
+- `RemindersProvider.deleteReminder(listUrl, uid)` — the one provider method
+  Reminders was missing relative to `CalDavProvider.deleteEvent`. Resolves
+  the object URL and ETag internally, same self-contained shape as
+  `deleteEvent`.
+- `formatReminderForDisplay()` — exported pure formatter adding `dueDisplay`,
+  `isOverdue`, and `displayTimezone`. Date-only VTODO `DUE` values (all-day
+  reminders, stored verbatim as `YYYY-MM-DD`) pass through unformatted;
+  running them through `formatInTimezone` would parse them as midnight UTC
+  and render the previous day in negative-offset zones.
+- `locateReminder()` — exported UID→list resolver. CalDAV has no
+  cross-collection UID lookup, so every `uid`-taking tool accepts an optional
+  `list`; omitting it walks all VTODO lists (O(lists) round-trips) the same
+  way `defer` does.
+- 15 tests in `test/reminder-tools.test.ts` covering the date-only
+  passthrough, overdue computation (completed reminders never report overdue;
+  unparseable dues don't throw), and `locateReminder`'s search, short-circuit,
+  and not-found paths.
+
+### Removed
+
+- **`defer` verb** (`src/verbs/defer.ts`) — deleted, and unregistered from
+  both `src/server.ts` and `api/mcp.ts`. Despite living in the verbs
+  directory it was never cross-service: it touched `ctx.reminders` only.
+  `defer(uid, until, timezone?, listUrl?)` was exactly
+  `update_reminder(uid, due, timezone?, list?)` plus the all-lists UID walk
+  that `update_reminder` now does itself, so the new per-service tool
+  subsumes it with no capability lost.
+
+  **Migration:** `defer(uid, until)` → `update_reminder(uid, due)`. The
+  `listUrl` argument becomes `list`, which additionally accepts a list
+  display name, not just a CalDAV URL.
+
+### Changed
+
+- Version 4.3.1 → 4.4.0 in `package.json`, `src/server.ts`, `api/mcp.ts`.
+- `complete_reminder` is idempotent: an already-completed reminder returns
+  `alreadyCompleted: true` with the original `completedAt` rather than
+  rewriting the completion timestamp.
+- `update_reminder` and `complete_reminder` append a re-fetch hint to 412
+  responses, mirroring `update_event`'s conflict handling.
+- Header comment in `src/server.ts` and the ENG-5 note in `src/verbs/defer.ts`
+  updated — ENG-5's verbs-only rule no longer applies to Reminders. Contacts
+  remains verbs-only.
+
+### Not covered
+
+VTODO-basic only, unchanged from the provider: no smart lists, nested
+subtasks, location triggers, alarms, or attachments. Those are EventKit-only
+on macOS — see `docs/ICLOUD-QUIRKS.md` and `TODOS.md`.
+
+### Ship-gate items NOT yet done
+
+Live iCloud round-trip (`bun run smoke-test`) against a real account, and a
+Vercel deploy check. All verification so far is typecheck + unit tests +
+tool-registration check against a mock provider — no write has hit iCloud.
+
 ## 4.3.1 — M4.3 v1 ship-gate instrumentation (`shapedBy` flag)
 
 Closes the M4.3 v1 ship gate that v4.3.0 deferred. The 5-day dogfood window
