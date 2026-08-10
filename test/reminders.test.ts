@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { parseVTodo, mergeReminderForUpdate } from "../src/providers/reminders.js";
+import {
+  parseVTodo,
+  mergeReminderForUpdate,
+  RemindersProvider,
+  normalizeListName,
+} from "../src/providers/reminders.js";
 import type { Reminder } from "../src/types.js";
 
 // ── VTODO list filter ──
@@ -250,5 +255,142 @@ describe("mergeReminderForUpdate", () => {
   test("SEQUENCE bumps to 1 on every update (iCloud quirk Q4)", () => {
     const merged = mergeReminderForUpdate(baseReminder, {});
     expect(merged.sequence).toBe(1);
+  });
+});
+
+// ── CalDAV read filter ──
+// Regression guard: tsdav's fetchCalendarObjects defaults to a VCALENDAR > VEVENT
+// comp-filter. Against a VTODO collection that matches nothing, so reminder reads
+// came back empty from iCloud while every unit test still passed.
+
+class StubRemindersProvider extends RemindersProvider {
+  calls: Array<Record<string, any>> = [];
+
+  constructor() {
+    super("https://caldav.icloud.com", "test@icloud.com", "pw");
+    this.connected = true;
+    this.client = {
+      fetchCalendarObjects: async (params: Record<string, any>) => {
+        this.calls.push(params);
+        return [
+          {
+            url: "https://caldav.icloud.com/1/tasks/uid-1.ics",
+            etag: '"abc"',
+            data: VCAL_BASIC_VTODO,
+          },
+        ];
+      },
+      fetchCalendars: async () => [
+        {
+          url: "https://caldav.icloud.com/1/tasks/",
+          displayName: "Reminders",
+          components: ["VTODO"],
+        },
+      ],
+    } as any;
+  }
+}
+
+function vtodoCompFilter(params: Record<string, any>) {
+  return params.filters?.[0]?.["comp-filter"]?.["comp-filter"]?._attributes?.name;
+}
+
+describe("reminder reads request VTODO, not VEVENT", () => {
+  test("listReminders sends a VCALENDAR > VTODO comp-filter", async () => {
+    const p = new StubRemindersProvider();
+    const out = await p.listReminders("https://caldav.icloud.com/1/tasks/");
+
+    expect(p.calls.length).toBe(1);
+    expect(vtodoCompFilter(p.calls[0]!)).toBe("VTODO");
+    expect(out.length).toBe(1);
+  });
+
+  test("getReminder sends a VCALENDAR > VTODO comp-filter", async () => {
+    const p = new StubRemindersProvider();
+    await p.getReminder("https://caldav.icloud.com/1/tasks/", "basic-uid-1");
+
+    expect(p.calls.length).toBe(1);
+    expect(vtodoCompFilter(p.calls[0]!)).toBe("VTODO");
+  });
+
+  test("no read falls back to tsdav's default VEVENT filter", async () => {
+    const p = new StubRemindersProvider();
+    await p.listReminders("https://caldav.icloud.com/1/tasks/");
+    await p.getReminder("https://caldav.icloud.com/1/tasks/", "basic-uid-1");
+
+    for (const call of p.calls) {
+      expect(call.filters).toBeDefined();
+      expect(JSON.stringify(call.filters)).not.toContain("VEVENT");
+    }
+  });
+});
+
+// ── List name matching ──
+// iCloud appends "⚠️" to the CalDAV display name of upgraded lists, so the server
+// name is "Reminders ⚠️" while callers ask for "Reminders".
+
+describe("normalizeListName", () => {
+  test("strips iCloud's appended warning marker", () => {
+    expect(normalizeListName("Reminders ⚠️")).toBe("reminders");
+    expect(normalizeListName("Family ⚠️")).toBe("family");
+  });
+
+  test("is a no-op for undecorated names apart from case/whitespace", () => {
+    expect(normalizeListName("Reminders")).toBe("reminders");
+    expect(normalizeListName("  Groceries  ")).toBe("groceries");
+  });
+
+  test("collapses whitespace left behind by a stripped inline emoji", () => {
+    expect(normalizeListName("Work 🔴 Urgent")).toBe("work urgent");
+  });
+
+  test("distinct names stay distinct", () => {
+    expect(normalizeListName("Work ⚠️")).not.toBe(normalizeListName("Home ⚠️"));
+  });
+});
+
+describe("resolveListUrl name matching", () => {
+  class NamedListsProvider extends RemindersProvider {
+    constructor(private names: string[]) {
+      super("https://caldav.icloud.com", "test@icloud.com", "pw");
+      this.connected = true;
+      this.client = {
+        fetchCalendars: async () =>
+          this.names.map((displayName, i) => ({
+            url: `https://caldav.icloud.com/1/tasks-${i}/`,
+            displayName,
+            components: ["VTODO"],
+          })),
+      } as any;
+    }
+  }
+
+  test("resolves a bare name against the server's ⚠️-suffixed name", async () => {
+    const p = new NamedListsProvider(["Reminders ⚠️", "Family ⚠️"]);
+    expect(await p.resolveListUrl("Reminders")).toBe(
+      "https://caldav.icloud.com/1/tasks-0/"
+    );
+    expect(await p.resolveListUrl("Family")).toBe(
+      "https://caldav.icloud.com/1/tasks-1/"
+    );
+  });
+
+  test("the exact server name still resolves", async () => {
+    const p = new NamedListsProvider(["Reminders ⚠️"]);
+    expect(await p.resolveListUrl("Reminders ⚠️")).toBe(
+      "https://caldav.icloud.com/1/tasks-0/"
+    );
+  });
+
+  test("exact match wins over a normalized collision", async () => {
+    const p = new NamedListsProvider(["Reminders ⚠️", "Reminders"]);
+    expect(await p.resolveListUrl("Reminders")).toBe(
+      "https://caldav.icloud.com/1/tasks-1/"
+    );
+  });
+
+  test("a genuinely absent list still errors", async () => {
+    const p = new NamedListsProvider(["Reminders ⚠️"]);
+    expect(p.resolveListUrl("Groceries")).rejects.toThrow(/not found/);
   });
 });

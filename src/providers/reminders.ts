@@ -35,6 +35,33 @@ function isUtcTimezone(tz: string): boolean {
   return t === "utc" || t === "etc/utc" || t === "gmt" || t === "etc/gmt";
 }
 
+// tsdav's fetchCalendarObjects defaults its calendar-query REPORT to a
+// VCALENDAR > VEVENT comp-filter. Against a VTODO collection that filter matches
+// nothing, so every read silently returns zero objects. Reminders reads must pass
+// this VTODO filter explicitly.
+const VTODO_FILTER = [
+  {
+    "comp-filter": {
+      _attributes: { name: "VCALENDAR" },
+      "comp-filter": {
+        _attributes: { name: "VTODO" },
+      },
+    },
+  },
+];
+
+/**
+ * Fold a reminder list name for tolerant matching: drop emoji and other pictographic
+ * decoration iCloud appends to the CalDAV display name, collapse whitespace, case-fold.
+ */
+export function normalizeListName(name: string): string {
+  return name
+    .replace(/[\p{Extended_Pictographic}‍︎️]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
 export class RemindersProvider extends CalDavTransport {
   private listsCache: DAVCalendar[] | null = null;
 
@@ -81,9 +108,17 @@ export class RemindersProvider extends CalDavTransport {
       return nameOrUrl;
     }
 
-    const matches = lists.filter(
+    // Exact (case-insensitive) match first. Failing that, retry with decoration
+    // stripped: iCloud appends "⚠️" to the CalDAV display name of lists whose
+    // Reminders have been upgraded, so the literal server name is "Reminders ⚠️"
+    // while every caller — human or model — asks for "Reminders".
+    let matches = lists.filter(
       (l) => l.displayName.toLowerCase() === nameOrUrl.toLowerCase()
     );
+    if (matches.length === 0) {
+      const target = normalizeListName(nameOrUrl);
+      matches = lists.filter((l) => normalizeListName(l.displayName) === target);
+    }
     if (matches.length === 0) {
       const available = lists.map((l) => l.displayName).join(", ");
       throw new Error(
@@ -109,6 +144,7 @@ export class RemindersProvider extends CalDavTransport {
 
     const objects = await this.dav.fetchCalendarObjects({
       calendar: { url: listUrl } as DAVCalendar,
+      filters: VTODO_FILTER,
     });
 
     const reminders: Reminder[] = [];
@@ -146,6 +182,7 @@ export class RemindersProvider extends CalDavTransport {
 
     const objects = await this.dav.fetchCalendarObjects({
       calendar: { url: listUrl } as DAVCalendar,
+      filters: VTODO_FILTER,
     });
 
     for (const obj of objects) {
